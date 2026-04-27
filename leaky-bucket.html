@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leaky Bucket (Lazy Evaluation)</title>
+  
+  <!-- React & ReactDOM -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    body {
+      background-color: #0f172a; /* slate-900 */
+      color: #f8fafc;
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- Configuration ---
+    const CONFIG = {
+      capacity: 10,       // 桶子最大容量 (Max Water Level)
+      leakRate: 2,        // 漏水速率: 每秒漏出 2 個單位的流量 (1 req / 500ms)
+    };
+
+    const CANVAS_W = 800;
+    const CANVAS_H = 400;
+
+    // --- Logic: Lazy Evaluation Leaky Bucket ---
+    class LazyLeakyBucket {
+      constructor() {
+        this.waterLevel = 0;
+        this.lastLeakTime = performance.now();
+        this.history = []; // 為了畫圖記錄歷史
+      }
+
+      // 只有在處理新請求時，才呼叫這個方法進行狀態更新
+      processRequest(time) {
+        // 1. 取得自上次更新後，經過了多少時間 (秒)
+        const elapsedSeconds = (time - this.lastLeakTime) / 1000;
+        
+        // 2. 計算這段時間「應該」要漏掉多少水
+        const leakedWater = elapsedSeconds * CONFIG.leakRate;
+
+        // 記錄計算前的狀態供動畫顯示
+        const prevLevel = this.waterLevel;
+        const prevTime = this.lastLeakTime;
+
+        // 3. 更新當前水位 (不能小於 0)
+        this.waterLevel = Math.max(0, this.waterLevel - leakedWater);
+        
+        // 4. 更新上次漏水時間
+        this.lastLeakTime = time;
+
+        let status = 'rejected';
+        
+        // 5. 檢查桶子是否還有空間容納新的請求 (+1 水位)
+        if (this.waterLevel + 1 <= CONFIG.capacity) {
+          this.waterLevel += 1;
+          status = 'accepted';
+        }
+
+        // 記錄這次的操作歷史，供 UI 顯示
+        this.history.unshift({
+            time: time,
+            elapsedStr: elapsedSeconds.toFixed(2),
+            leakedStr: leakedWater.toFixed(2),
+            prevLevelStr: prevLevel.toFixed(2),
+            newLevelStr: this.waterLevel.toFixed(2),
+            status: status
+        });
+        
+        if (this.history.length > 5) this.history.pop(); // 只留最近 5 筆
+
+        return status === 'accepted';
+      }
+    }
+
+    // --- Main App Component ---
+    function App() {
+      const canvasRef = useRef(null);
+      const bucketRef = useRef(new LazyLeakyBucket());
+      
+      const [now, setNow] = useState(performance.now());
+      const [triggerDraw, setTriggerDraw] = useState(0); // 用來強制 re-render UI
+
+      // 動畫迴圈：僅負責更新時間軸與視覺效果，不牽涉邏輯狀態改變
+      useEffect(() => {
+        let animationId;
+        const loop = (time) => {
+          setNow(time);
+          drawCanvas(time);
+          animationId = requestAnimationFrame(loop);
+        };
+        animationId = requestAnimationFrame(loop);
+        return () => cancelAnimationFrame(animationId);
+      }, []);
+
+      const drawCanvas = (currentTime) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+        const bucket = bucketRef.current;
+
+        // --- 繪製資訊面板 ---
+        ctx.fillStyle = '#334155'; // slate-700
+        ctx.fillRect(20, 20, 280, 160);
+        ctx.strokeStyle = '#475569'; ctx.lineWidth = 2; ctx.strokeRect(20, 20, 280, 160);
+        
+        ctx.fillStyle = '#f8fafc'; ctx.font = 'bold 16px sans-serif';
+        ctx.fillText('後端記憶體儲存狀態', 35, 50);
+        
+        ctx.font = '14px monospace'; ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(`Capacity : ${CONFIG.capacity}`, 35, 80);
+        ctx.fillText(`Leak Rate: ${CONFIG.leakRate} / sec`, 35, 105);
+        
+        // 強調真實儲存的變數
+        ctx.fillStyle = '#38bdf8'; // sky-400
+        ctx.fillText(`water_level : ${bucket.waterLevel.toFixed(2)}`, 35, 140);
+        ctx.fillStyle = '#f472b6'; // pink-400
+        ctx.fillText(`last_time   : T - ${((currentTime - bucket.lastLeakTime)/1000).toFixed(2)}s`, 35, 165);
+
+
+        // --- 繪製桶子 (視覺輔助，實際水並不會自己流，而是顯示當下計算值) ---
+        const bx = 450, by = 60, bw = 140, bh = 240;
+        
+        // 桶身
+        ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by); ctx.stroke();
+        
+        // 水位標示線
+        ctx.setLineDash([5, 5]); ctx.strokeStyle = '#475569'; ctx.lineWidth = 1;
+        for(let i=0; i<=CONFIG.capacity; i++) {
+            const y = (by + bh) - (i/CONFIG.capacity)*bh;
+            ctx.beginPath(); ctx.moveTo(bx-10, y); ctx.lineTo(bx+bw+10, y); ctx.stroke();
+            if(i%2===0) { ctx.fillStyle = '#64748b'; ctx.font = '12px sans-serif'; ctx.fillText(i, bx-25, y+4); }
+        }
+        ctx.setLineDash([]);
+
+        // 水 (表示當下的 waterLevel)
+        const fillHeight = (bucket.waterLevel / CONFIG.capacity) * bh;
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.6)'; // sky-400
+        ctx.fillRect(bx + 2, (by + bh) - fillHeight, bw - 4, fillHeight);
+        
+        // 顯示預計要漏掉的水 (虛擬的水位)
+        // 這就是「惰性」的精隨，我們畫出「如果現在有一個 Request 進來，水位會掉到哪」
+        const elapsed = (currentTime - bucket.lastLeakTime) / 1000;
+        const virtualLeaked = elapsed * CONFIG.leakRate;
+        const virtualLevel = Math.max(0, bucket.waterLevel - virtualLeaked);
+        const virtualFillHeight = (virtualLevel / CONFIG.capacity) * bh;
+
+        if (virtualFillHeight < fillHeight) {
+            ctx.fillStyle = 'rgba(244, 114, 182, 0.3)'; // pink-400 transparent
+            ctx.fillRect(bx + 2, (by + bh) - fillHeight, bw - 4, fillHeight - virtualFillHeight);
+            
+            // 標示虛擬扣除線
+            ctx.strokeStyle = '#f472b6'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(bx, (by + bh) - virtualFillHeight); ctx.lineTo(bx+bw, (by + bh) - virtualFillHeight); ctx.stroke();
+            ctx.fillStyle = '#f472b6'; ctx.font = '12px sans-serif';
+            ctx.fillText(`待扣除 (-${virtualLeaked.toFixed(2)})`, bx + bw + 10, (by + bh) - virtualFillHeight + 4);
+        }
+
+        // --- 時間軸 (表示經過的時間) ---
+        ctx.strokeStyle = '#334155'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(50, 350); ctx.lineTo(750, 350); ctx.stroke();
+        
+        // 標記上次更新時間點
+        const pxPerSec = 100; // 每秒 100px
+        const elapsedPx = elapsed * pxPerSec;
+        const originX = 650; // 當前時間位置 (固定在右側)
+        const lastTimeX = originX - elapsedPx;
+
+        // 當前時間指標
+        ctx.fillStyle = '#10b981'; ctx.beginPath(); ctx.arc(originX, 350, 6, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#f8fafc'; ctx.fillText('Now', originX - 12, 375);
+
+        // 上次更新時間指標
+        if (lastTimeX > 50) {
+            ctx.fillStyle = '#f472b6'; ctx.beginPath(); ctx.arc(lastTimeX, 350, 6, 0, Math.PI*2); ctx.fill();
+            ctx.fillText('Last Update', lastTimeX - 30, 375);
+            
+            // 畫箭頭表示時間流逝
+            ctx.strokeStyle = '#f472b6'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(lastTimeX + 10, 335); ctx.lineTo(originX - 10, 335); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(originX - 15, 330); ctx.lineTo(originX - 5, 335); ctx.lineTo(originX - 15, 340); ctx.stroke();
+            ctx.fillText(`${elapsed.toFixed(1)}s`, (lastTimeX + originX)/2 - 10, 325);
+        } else {
+             ctx.fillStyle = '#f472b6';
+             ctx.fillText(`Last Update was ${elapsed.toFixed(1)}s ago`, 60, 330);
+        }
+
+      };
+
+      const handleRequest = () => {
+        const time = performance.now();
+        bucketRef.current.processRequest(time);
+        setTriggerDraw(prev => prev + 1); // 強制更新 UI 日誌
+      };
+
+      const handleReset = () => {
+         bucketRef.current = new LazyLeakyBucket();
+         setTriggerDraw(prev => prev + 1);
+      };
+
+      return (
+        <div className="max-w-5xl mx-auto p-6">
+          <div className="mb-6 border-b border-slate-700 pb-4">
+            <h1 className="text-2xl font-bold text-sky-400 mb-2">Leaky Bucket - 惰性計算實作 (Lazy Evaluation)</h1>
+            <p className="text-slate-400">
+              真實的後端系統不會有「常駐程式」一直在扣減水位。而是當 <b>Request 抵達的瞬間</b>，才計算「距離上次更新經過了多久」，藉此一口氣扣除這段時間該流失的水量，然後再加上新的 Request。
+            </p>
+          </div>
+
+          <div className="flex gap-4 mb-6">
+            <button 
+              onClick={handleRequest} 
+              className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-bold shadow-lg flex items-center gap-2 active:scale-95 transition-transform"
+            >
+               發送 Request
+            </button>
+            <button 
+              onClick={handleReset} 
+              className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-3 rounded-lg font-bold transition-colors"
+            >
+               Reset
+            </button>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-2xl mb-6">
+            <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} className="w-full h-auto block"></canvas>
+          </div>
+
+          {/* 歷史紀錄面板 */}
+          <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+             <h3 className="text-lg font-bold text-slate-200 mb-3 border-b border-slate-600 pb-2">運算日誌 (最新 5 筆)</h3>
+             {bucketRef.current.history.length === 0 ? (
+                 <div className="text-slate-500 italic py-2">尚未發送任何 Request...</div>
+             ) : (
+                 <div className="space-y-3">
+                     {bucketRef.current.history.map((log, idx) => (
+                         <div key={idx} className={`p-3 rounded border border-l-4 ${log.status === 'accepted' ? 'bg-slate-900 border-slate-700 border-l-emerald-500' : 'bg-rose-950/30 border-rose-900/50 border-l-rose-500'}`}>
+                             <div className="flex justify-between items-center mb-1">
+                                <span className={`font-bold ${log.status === 'accepted' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {log.status === 'accepted' ? '✓ Accepted (+1)' : '✗ Rejected (Full)'}
+                                </span>
+                             </div>
+                             <div className="text-sm font-mono text-slate-300 grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1">
+                                <div>1. 經過時間: <span className="text-pink-400">{log.elapsedStr}s</span></div>
+                                <div>2. 應扣水量: {log.elapsedStr}s × {CONFIG.leakRate} = <span className="text-pink-400">-{log.leakedStr}</span></div>
+                                <div>3. 計算水位: max(0, {log.prevLevelStr} - {log.leakedStr}) = <span className="text-sky-400">{Math.max(0, parseFloat(log.prevLevelStr) - parseFloat(log.leakedStr)).toFixed(2)}</span></div>
+                                <div>4. 最終狀態: <span className="text-sky-400">{log.newLevelStr}</span> / {CONFIG.capacity}</div>
+                             </div>
+                         </div>
+                     ))}
+                 </div>
+             )}
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
