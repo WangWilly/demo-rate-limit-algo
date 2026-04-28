@@ -3,542 +3,108 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Rate Limit Algorithms Visualizer</title>
-  
-  <!-- React & ReactDOM -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-  
-  <!-- Babel for JSX -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  
-  <!-- Tailwind CSS -->
+  <title>Network & Algorithm Demos</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  
   <style>
     body {
-      background-color: #020617; /* slate-950 */
+      background-color: #020617;
       color: #f8fafc;
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    .custom-scrollbar::-webkit-scrollbar { height: 8px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; border-radius: 4px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+    .card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 24px;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+    }
+    .card:hover {
+      border-color: #3b82f6;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(59,130,246,0.15);
+    }
+    .tag {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
   </style>
 </head>
 <body>
-  <div id="root"></div>
+  <div class="min-h-screen flex flex-col">
+    <!-- Hero -->
+    <header class="text-center py-20 px-6">
+      <p class="text-blue-400 text-sm font-semibold tracking-widest uppercase mb-3">Interactive Demos</p>
+      <h1 class="text-4xl font-bold text-white mb-4">Network &amp; Algorithm Visualizer</h1>
+      <p class="text-slate-400 text-lg max-w-xl mx-auto">
+        A collection of interactive demos covering rate limiting, load balancing, transport protocols, and more.
+      </p>
+    </header>
 
-  <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    <!-- Cards grid -->
+    <main class="flex-1 max-w-5xl mx-auto w-full px-6 pb-20">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
 
-    // --- Configuration & Constants ---
-    const CONFIG = {
-      cap: 10,             // Max capacity / limits
-      rate: 5,             // Fill/Leak rate per second
-      window: 2000,        // Window size in ms (2 seconds)
-      windowLimit: 10      // Requests per window
-    };
+        <a href="rate-limit.html" class="card">
+          <div><span class="tag" style="background:#1e3a5f;color:#60a5fa;">Rate Limiting</span></div>
+          <h2 class="text-white font-semibold text-lg">Rate Limit Algorithms</h2>
+          <p class="text-slate-400 text-sm">Visualize Token Bucket, Leaky Bucket, Fixed Window, and Sliding Window algorithms side-by-side in real time.</p>
+          <span class="text-blue-400 text-sm mt-auto">Open demo →</span>
+        </a>
 
-    const CANVAS_W = 800;
-    const CANVAS_H = 140;
-    const MECH_W = 180;
-    const TIMELINE_START = 220;
-    const SPEED = 0.15; // pixels per ms for timeline scrolling
+        <a href="leaky-bucket.html" class="card">
+          <div><span class="tag" style="background:#1e3a5f;color:#60a5fa;">Rate Limiting</span></div>
+          <h2 class="text-white font-semibold text-lg">Leaky Bucket (Lazy)</h2>
+          <p class="text-slate-400 text-sm">Deep-dive into the Leaky Bucket algorithm with lazy evaluation, showing how requests drip through a fixed-rate hole.</p>
+          <span class="text-blue-400 text-sm mt-auto">Open demo →</span>
+        </a>
 
-    // --- Algorithm Implementations ---
+        <a href="grpc-lb.html" class="card">
+          <div><span class="tag" style="background:#14532d;color:#4ade80;">Load Balancing</span></div>
+          <h2 class="text-white font-semibold text-lg">gRPC Load Balancing</h2>
+          <p class="text-slate-400 text-sm">Animated walkthrough of gRPC client-side and proxy load-balancing strategies with live request routing.</p>
+          <span class="text-blue-400 text-sm mt-auto">Open demo →</span>
+        </a>
 
-    class TokenBucket {
-      constructor() {
-        this.tokens = CONFIG.cap;
-        this.lastRefill = performance.now();
-        this.history = [];
-        this.stats = { accepted: 0, dropped: 0 };
-      }
-      update(time) {
-        const elapsed = (time - this.lastRefill) / 1000;
-        const add = elapsed * CONFIG.rate;
-        if (add > 0) {
-          this.tokens = Math.min(CONFIG.cap, this.tokens + add);
-          this.lastRefill = time;
-        }
-      }
-      process(time) {
-        if (this.tokens >= 1) {
-          this.tokens -= 1;
-          this.history.push({ time, status: 'accepted' });
-          this.stats.accepted++;
-          return true;
-        }
-        this.history.push({ time, status: 'dropped' });
-        this.stats.dropped++;
-        return false;
-      }
-      getTimeline(currentTime) {
-        while(this.history.length > 0 && currentTime - this.history[0].time > 6000) this.history.shift();
-        return this.history;
-      }
-    }
+        <a href="http-basic.html" class="card">
+          <div><span class="tag" style="background:#3b1f6e;color:#c084fc;">Protocols</span></div>
+          <h2 class="text-white font-semibold text-lg">HTTP Versions</h2>
+          <p class="text-slate-400 text-sm">Compare HTTP/1.1, HTTP/2, and HTTP/3 handshakes, TTL behavior, and throughput with adjustable speed controls.</p>
+          <span class="text-blue-400 text-sm mt-auto">Open demo →</span>
+        </a>
 
-    class LeakyBucket {
-      constructor() {
-        this.queue = [];
-        this.lastLeak = performance.now();
-        this.history = [];
-        this.stats = { accepted: 0, dropped: 0 };
-      }
-      update(time) {
-        const interval = 1000 / CONFIG.rate; // 200ms per leak
-        while (this.queue.length > 0 && time - this.lastLeak >= interval) {
-           this.queue.shift();
-           this.lastLeak += interval;
-           this.history.push({ time: this.lastLeak, status: 'accepted' });
-           this.stats.accepted++;
-        }
-        if (this.queue.length === 0 && time - this.lastLeak > interval) {
-           this.lastLeak = time;
-        }
-      }
-      process(time) {
-        if (this.queue.length < CONFIG.cap) {
-          this.queue.push(time);
-          return true;
-        }
-        this.history.push({ time, status: 'dropped' });
-        this.stats.dropped++;
-        return false;
-      }
-      getTimeline(currentTime) {
-        while(this.history.length > 0 && currentTime - this.history[0].time > 6000) this.history.shift();
-        return this.history;
-      }
-    }
+        <a href="quic-impl-brief.html" class="card">
+          <div><span class="tag" style="background:#3b1f6e;color:#c084fc;">Protocols</span></div>
+          <h2 class="text-white font-semibold text-lg">QUIC &amp; UDP</h2>
+          <p class="text-slate-400 text-sm">Explore how QUIC builds reliable, multiplexed streams over UDP, with connection migration and 0-RTT explained.</p>
+          <span class="text-blue-400 text-sm mt-auto">Open demo →</span>
+        </a>
 
-    class FixedWindow {
-      constructor() {
-        this.count = 0;
-        this.windowStart = performance.now();
-        this.history = [];
-        this.stats = { accepted: 0, dropped: 0 };
-      }
-      update(time) {
-        if (time - this.windowStart >= CONFIG.window) {
-          const windowsPassed = Math.floor((time - this.windowStart) / CONFIG.window);
-          this.windowStart += windowsPassed * CONFIG.window;
-          this.count = 0;
-        }
-      }
-      process(time) {
-        if (this.count < CONFIG.windowLimit) {
-          this.count++;
-          this.history.push({ time, status: 'accepted' });
-          this.stats.accepted++;
-          return true;
-        }
-        this.history.push({ time, status: 'dropped' });
-        this.stats.dropped++;
-        return false;
-      }
-      getTimeline(currentTime) {
-        while(this.history.length > 0 && currentTime - this.history[0].time > 6000) this.history.shift();
-        return this.history;
-      }
-    }
+        <a href="ws-rawtcp-connection.html" class="card">
+          <div><span class="tag" style="background:#3b1f6e;color:#c084fc;">Protocols</span></div>
+          <h2 class="text-white font-semibold text-lg">WebSocket &amp; Long Connections</h2>
+          <p class="text-slate-400 text-sm">Side-by-side comparison of WebSocket, Server-Sent Events, and raw TCP long-connection mechanisms.</p>
+          <span class="text-blue-400 text-sm mt-auto">Open demo →</span>
+        </a>
 
-    class SlidingWindow {
-      constructor() {
-        this.log = [];
-        this.history = [];
-        this.stats = { accepted: 0, dropped: 0 };
-      }
-      update(time) {
-        while(this.log.length > 0 && time - this.log[0] >= CONFIG.window) {
-          this.log.shift();
-        }
-      }
-      process(time) {
-        if (this.log.length < CONFIG.windowLimit) {
-          this.log.push(time);
-          this.history.push({ time, status: 'accepted' });
-          this.stats.accepted++;
-          return true;
-        }
-        this.history.push({ time, status: 'dropped' });
-        this.stats.dropped++;
-        return false;
-      }
-      getTimeline(currentTime) {
-        while(this.history.length > 0 && currentTime - this.history[0].time > 6000) this.history.shift();
-        return this.history;
-      }
-    }
+      </div>
+    </main>
 
-    // --- Visualization Engine ---
-    class Visualizer {
-      constructor(canvasId, limiter, type) {
-        this.canvasId = canvasId;
-        this.limiter = limiter;
-        this.type = type;
-        this.canvas = null;
-        this.ctx = null;
-      }
+    <footer class="text-center text-slate-600 text-xs pb-8">
+      Network &amp; Algorithm Demos
+    </footer>
+  </div>
 
-      init() {
-        this.canvas = document.getElementById(this.canvasId);
-        if (this.canvas) this.ctx = this.canvas.getContext('2d');
-      }
-
-      addRequest(time) {
-        this.limiter.process(time);
-      }
-
-      draw(currentTime) {
-        if (!this.ctx) return;
-        this.limiter.update(currentTime);
-        const ctx = this.ctx;
-        
-        ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-
-        // Draw Divider
-        ctx.strokeStyle = '#1e293b'; // slate-800
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(200, 0); ctx.lineTo(200, CANVAS_H); ctx.stroke();
-
-        this.drawMechanism(currentTime, ctx);
-        this.drawTimeline(currentTime, ctx);
-      }
-
-      drawMechanism(currentTime, ctx) {
-        ctx.save();
-        ctx.translate(10, 10);
-        const mx = 0, my = 0, mw = 180, mh = 120;
-
-        if (this.type === 'token') {
-          // Bucket
-          ctx.strokeStyle = '#64748b'; ctx.lineWidth = 3;
-          ctx.beginPath(); ctx.moveTo(40, 20); ctx.lineTo(40, 100); ctx.lineTo(140, 100); ctx.lineTo(140, 20); ctx.stroke();
-          // Tokens
-          ctx.fillStyle = '#10b981';
-          const tokens = Math.floor(this.limiter.tokens);
-          for(let i=0; i<tokens; i++) {
-            const tx = 55 + (i%5)*18;
-            const ty = 90 - Math.floor(i/5)*18;
-            ctx.beginPath(); ctx.arc(tx, ty, 6, 0, Math.PI*2); ctx.fill();
-          }
-          ctx.fillStyle = '#94a3b8'; ctx.font='12px sans-serif'; ctx.textAlign='center';
-          ctx.fillText(`Tokens: ${tokens} / ${CONFIG.cap}`, 90, 118);
-
-        } else if (this.type === 'leaky') {
-          // Bucket
-          ctx.strokeStyle = '#64748b'; ctx.lineWidth = 3;
-          ctx.beginPath(); ctx.moveTo(40, 20); ctx.lineTo(40, 100); ctx.lineTo(140, 100); ctx.lineTo(140, 20); ctx.stroke();
-          // Queue (Water)
-          const fillLevel = this.limiter.queue.length / CONFIG.cap;
-          ctx.fillStyle = 'rgba(14, 165, 233, 0.4)'; // sky-500 transparent
-          ctx.fillRect(42, 98 - fillLevel * 76, 96, fillLevel * 76);
-          // Queue Dots
-          ctx.fillStyle = '#eab308'; // yellow
-          for(let i=0; i<this.limiter.queue.length; i++) {
-            const tx = 55 + (i%5)*18;
-            const ty = 90 - Math.floor(i/5)*18;
-            ctx.beginPath(); ctx.arc(tx, ty, 6, 0, Math.PI*2); ctx.fill();
-          }
-          ctx.fillStyle = '#94a3b8'; ctx.font='12px sans-serif'; ctx.textAlign='center';
-          ctx.fillText(`Queue: ${this.limiter.queue.length} / ${CONFIG.cap}`, 90, 118);
-
-        } else if (this.type === 'fixed') {
-          const elapsed = currentTime - this.limiter.windowStart;
-          const prog = Math.min(1, elapsed / CONFIG.window);
-          ctx.fillStyle = '#cbd5e1'; ctx.font='12px sans-serif';
-          ctx.fillText(`Time Window (${CONFIG.window/1000}s)`, 10, 25);
-          ctx.fillStyle = '#1e293b'; ctx.fillRect(10, 35, mw-20, 10);
-          ctx.fillStyle = '#3b82f6'; ctx.fillRect(10, 35, (mw-20)*prog, 10);
-
-          ctx.fillStyle = '#cbd5e1';
-          ctx.fillText(`Count: ${this.limiter.count} / ${CONFIG.windowLimit}`, 10, 75);
-          ctx.fillStyle = '#1e293b'; ctx.fillRect(10, 85, mw-20, 10);
-          const capProg = Math.min(1, this.limiter.count / CONFIG.windowLimit);
-          ctx.fillStyle = capProg >= 1 ? '#ef4444' : '#10b981';
-          ctx.fillRect(10, 85, (mw-20)*capProg, 10);
-
-        } else if (this.type === 'sliding') {
-          ctx.fillStyle = '#cbd5e1'; ctx.font='12px sans-serif';
-          ctx.fillText(`Active Log (${CONFIG.window/1000}s)`, 10, 25);
-          
-          ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 2;
-          ctx.strokeRect(10, 35, mw-20, 26);
-          ctx.fillStyle = '#10b981';
-          for (let logTime of this.limiter.log) {
-             const age = currentTime - logTime;
-             const px = 10 + (mw-20) * (1 - age/CONFIG.window);
-             if (px >= 10 && px <= mw-10) {
-               ctx.beginPath(); ctx.arc(px, 48, 4, 0, Math.PI*2); ctx.fill();
-             }
-          }
-          
-          ctx.fillStyle = '#cbd5e1';
-          ctx.fillText(`Requests in Frame: ${this.limiter.log.length} / ${CONFIG.windowLimit}`, 10, 85);
-        }
-        ctx.restore();
-      }
-
-      drawTimeline(currentTime, ctx) {
-        ctx.save();
-        ctx.beginPath(); ctx.rect(201, 0, CANVAS_W - 200, CANVAS_H); ctx.clip();
-        
-        // Base timeline line
-        ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.moveTo(TIMELINE_START, CANVAS_H/2); ctx.lineTo(CANVAS_W, CANVAS_H/2); ctx.stroke();
-
-        // Second markers
-        for (let i = 0; i <= 5; i++) {
-           const tx = TIMELINE_START + i * 1000 * SPEED;
-           if (tx > CANVAS_W) continue;
-           ctx.strokeStyle = '#334155'; ctx.lineWidth = 2;
-           ctx.beginPath(); ctx.moveTo(tx, CANVAS_H/2 - 6); ctx.lineTo(tx, CANVAS_H/2 + 6); ctx.stroke();
-           ctx.fillStyle = '#64748b'; ctx.font='10px sans-serif'; ctx.textAlign = 'center';
-           ctx.fillText(`-${i}s`, tx, CANVAS_H/2 + 20);
-        }
-
-        // Draw entities
-        const entities = this.limiter.getTimeline(currentTime);
-        for (let req of entities) {
-           const x = TIMELINE_START + (currentTime - req.time) * SPEED;
-           if (x < TIMELINE_START - 10 || x > CANVAS_W + 10) continue;
-           
-           ctx.beginPath(); ctx.arc(x, CANVAS_H/2, 6, 0, Math.PI*2);
-           if (req.status === 'accepted') {
-             ctx.fillStyle = '#10b981'; ctx.fill();
-           } else {
-             ctx.fillStyle = '#ef4444'; ctx.fill();
-             ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
-             ctx.beginPath(); ctx.moveTo(x-3, CANVAS_H/2-3); ctx.lineTo(x+3, CANVAS_H/2+3); ctx.stroke();
-             ctx.beginPath(); ctx.moveTo(x+3, CANVAS_H/2-3); ctx.lineTo(x-3, CANVAS_H/2+3); ctx.stroke();
-           }
-        }
-        ctx.restore();
-      }
-    }
-
-    // --- Icons ---
-    const Icons = {
-      Click: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20v-8"/><path d="M8 16l4-4 4 4"/><path d="M12 4v4"/></svg>,
-      Zap: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
-      Alert: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
-      Play: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>,
-      Square: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>,
-      Refresh: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-    };
-
-    // --- Main App Component ---
-    function App() {
-      const engineRef = useRef(null);
-      const pendingRequests = useRef([]);
-      const scheduledEvents = useRef([]);
-      const lastAutoReq = useRef(0);
-      
-      const [autoMode, setAutoMode] = useState(false);
-      const [rate, setRate] = useState(6); // requests per second
-      const [stats, setStats] = useState({});
-      const [demoActive, setDemoActive] = useState(false);
-
-      const autoModeRef = useRef(autoMode); autoModeRef.current = autoMode;
-      const rateRef = useRef(rate); rateRef.current = rate;
-      const demoRef = useRef(demoActive);
-
-      const initEngine = () => {
-        engineRef.current = [
-          new Visualizer('canvas-token', new TokenBucket(), 'token'),
-          new Visualizer('canvas-leaky', new LeakyBucket(), 'leaky'),
-          new Visualizer('canvas-fixed', new FixedWindow(), 'fixed'),
-          new Visualizer('canvas-sliding', new SlidingWindow(), 'sliding'),
-        ];
-        // Short delay to ensure DOM has canvases
-        setTimeout(() => {
-          engineRef.current.forEach(v => v.init());
-        }, 50);
-        pendingRequests.current = [];
-        scheduledEvents.current = [];
-        setStats({});
-      };
-
-      useEffect(() => {
-        initEngine();
-        let animationId;
-        
-        const loop = (time) => {
-          // Handle Auto Mode
-          if (autoModeRef.current) {
-            const interval = 1000 / rateRef.current;
-            if (time - lastAutoReq.current > interval) {
-              pendingRequests.current.push(time);
-              lastAutoReq.current = time;
-            }
-          }
-
-          // Handle Scheduled Demo Events
-          if (scheduledEvents.current.length > 0) {
-            scheduledEvents.current = scheduledEvents.current.filter(ev => {
-              if (time >= ev.targetTime) {
-                for(let i=0; i<ev.count; i++) pendingRequests.current.push(time + i*20);
-                return false;
-              }
-              return true;
-            });
-            if (scheduledEvents.current.length === 0 && demoRef.current) {
-               setDemoActive(false);
-            }
-          }
-
-          // Process Pending
-          while (pendingRequests.current.length > 0) {
-            const reqTime = pendingRequests.current.shift();
-            engineRef.current.forEach(v => v.addRequest(reqTime));
-          }
-
-          // Draw
-          engineRef.current.forEach(v => v.draw(time));
-          
-          animationId = requestAnimationFrame(loop);
-        };
-
-        animationId = requestAnimationFrame(loop);
-
-        // Stats Polling Interval
-        const statsInterval = setInterval(() => {
-          if (engineRef.current) {
-            setStats({
-              token: engineRef.current[0].limiter.stats,
-              leaky: engineRef.current[1].limiter.stats,
-              fixed: engineRef.current[2].limiter.stats,
-              sliding: engineRef.current[3].limiter.stats,
-            });
-          }
-        }, 300);
-
-        return () => {
-          cancelAnimationFrame(animationId);
-          clearInterval(statsInterval);
-        };
-      }, []);
-
-      const handleRequest = (count) => {
-        const now = performance.now();
-        for(let i=0; i<count; i++) {
-          pendingRequests.current.push(now + i * 20); // offset slightly so they don't perfectly overlap
-        }
-      };
-
-      const handleDemoSpike = () => {
-        if (!engineRef.current) return;
-        const fixedLimiter = engineRef.current[2].limiter;
-        const now = performance.now();
-        const start = fixedLimiter.windowStart;
-        
-        // Calculate the next window boundary
-        const elapsed = now - start;
-        const nextBoundary = start + Math.ceil(elapsed / CONFIG.window) * CONFIG.window;
-        
-        // If boundary is extremely close, wait for the next one to ensure visual clarity
-        const targetBoundary = (nextBoundary - now < 600) ? nextBoundary + CONFIG.window : nextBoundary;
-
-        // Fire 10 reqs 150ms BEFORE boundary, and 10 reqs 50ms AFTER boundary
-        scheduledEvents.current.push({ targetTime: targetBoundary - 150, count: 10 });
-        scheduledEvents.current.push({ targetTime: targetBoundary + 50, count: 10 });
-        setDemoActive(true);
-        demoRef.current = true;
-      };
-
-      const ALGORITHMS = [
-        { id: 'token', name: 'Token Bucket', tag: 'Most APIs', desc: 'Allows bursts; tokens refill at a fixed rate.' },
-        { id: 'leaky', name: 'Leaky Bucket', tag: 'Background tasks', desc: 'Constant output rate; smooths out traffic completely.' },
-        { id: 'fixed', name: 'Fixed Window', tag: 'Simple quotas', desc: 'Easy to implement (e.g., 100 req/min), but allows spikes at window boundaries.' },
-        { id: 'sliding', name: 'Sliding Window', tag: 'Precision', desc: 'Prevents spikes at boundaries by using a rolling time frame.' }
-      ];
-
-      return (
-        <div className="max-w-6xl mx-auto p-4 md:p-8">
-          
-          <div className="mb-8 text-center md:text-left">
-            <h1 className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-              Rate Limit Algorithms Visualizer
-            </h1>
-            <p className="text-slate-400 mt-2 text-sm md:text-base">
-              Interactive visualization of system rate limit strategies (Limits set to {CONFIG.cap} reqs / 2 seconds).
-            </p>
-          </div>
-
-          {/* Control Panel */}
-          <div className="flex flex-col md:flex-row flex-wrap gap-4 mb-8 p-4 bg-slate-900 border border-slate-800 rounded-xl shadow-lg items-center">
-             
-             <button onClick={() => handleRequest(1)} className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-medium transition-all active:scale-95 bg-blue-600 hover:bg-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)] w-full md:w-auto">
-               <Icons.Click /> Send 1 Request
-             </button>
-             
-             <button onClick={() => handleRequest(10)} className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-medium transition-all active:scale-95 bg-purple-600 hover:bg-purple-500 text-white shadow-[0_0_15px_rgba(147,51,234,0.3)] w-full md:w-auto">
-               <Icons.Zap /> Send Burst (10)
-             </button>
-
-             <button onClick={handleDemoSpike} disabled={demoActive} className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-medium transition-all active:scale-95 ${demoActive ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-amber-600 hover:bg-amber-500 text-white shadow-[0_0_15px_rgba(217,119,6,0.3)]'} w-full md:w-auto`}>
-               <Icons.Alert /> {demoActive ? 'Spike Scheduled...' : 'Demo Boundary Spike'}
-             </button>
-
-             <div className="flex flex-1 items-center justify-center md:justify-end gap-4 bg-[#0a0f1c] p-2 px-4 rounded-lg border border-slate-800 w-full md:w-auto">
-               <button onClick={() => setAutoMode(!autoMode)} className={`flex items-center gap-2 font-medium ${autoMode ? 'text-rose-400' : 'text-emerald-400'} hover:opacity-80 transition-opacity`}>
-                  {autoMode ? <Icons.Square /> : <Icons.Play />}
-                  {autoMode ? 'Stop Stream' : 'Auto Stream'}
-               </button>
-               <input type="range" min="1" max="25" value={rate} onChange={(e) => setRate(Number(e.target.value))} className="w-24 md:w-32 accent-blue-500" />
-               <span className="text-slate-400 text-sm font-mono w-16 text-right">{rate} /s</span>
-             </div>
-
-             <button onClick={initEngine} className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors text-slate-400 hover:bg-slate-800 hover:text-white w-full md:w-auto" title="Reset Simulation">
-               <Icons.Refresh />
-             </button>
-          </div>
-
-          {/* Algorithms Grid */}
-          <div className="grid grid-cols-1 gap-6">
-            {ALGORITHMS.map((algo) => (
-              <div key={algo.id} className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex flex-col xl:flex-row">
-                 <div className="p-5 border-b xl:border-b-0 xl:border-r border-slate-800 bg-slate-900/50 xl:w-1/3 flex flex-col justify-between">
-                   <div>
-                     <div className="flex items-center gap-3 mb-2">
-                       <h2 className="text-xl font-bold text-slate-100">{algo.name}</h2>
-                       <span className="px-2 py-0.5 bg-slate-950 text-blue-400 text-[11px] uppercase rounded border border-slate-800 tracking-wider font-bold">
-                         {algo.tag}
-                       </span>
-                     </div>
-                     <p className="text-slate-400 text-sm leading-relaxed">{algo.desc}</p>
-                   </div>
-                   
-                   <div className="flex gap-4 mt-4 text-sm font-medium">
-                     <div className="bg-[#0a0f1c] border border-slate-800 rounded-lg px-3 py-1.5 flex items-center gap-2 text-emerald-400 flex-1">
-                       <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]"></span> 
-                       Accepted: {stats[algo.id]?.accepted || 0}
-                     </div>
-                     <div className="bg-[#0a0f1c] border border-slate-800 rounded-lg px-3 py-1.5 flex items-center gap-2 text-rose-400 flex-1">
-                       <span className="w-2 h-2 rounded-full bg-rose-500 shadow-[0_0_8px_#ef4444]"></span> 
-                       Dropped: {stats[algo.id]?.dropped || 0}
-                     </div>
-                   </div>
-                 </div>
-                 
-                 <div className="p-4 overflow-x-auto bg-[#040814] flex-1 flex justify-start xl:justify-center items-center custom-scrollbar">
-                   <canvas id={`canvas-${algo.id}`} width={CANVAS_W} height={CANVAS_H} className="rounded-lg min-w-[800px]"></canvas>
-                 </div>
-              </div>
-            ))}
-          </div>
-
-        </div>
-      );
-    }
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
+  <script src="nav.js"></script>
 </body>
 </html>
