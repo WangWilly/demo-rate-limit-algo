@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTTP 版本通訊展示 (含握手、TTL與速度調整)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        .no-select { user-select: none; }
+        
+        /* 自訂 Range 滑桿樣式 */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #4b5563;
+            border-radius: 2px;
+        }
+        input[type=range]:focus {
+            outline: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans h-screen overflow-hidden flex no-select">
+
+    <!-- 側邊控制欄 -->
+    <div class="w-80 bg-gray-800 flex flex-col shadow-2xl z-20 border-r border-gray-700 flex-shrink-0">
+        <div class="p-6 pb-4 border-b border-gray-700">
+            <h1 class="text-xl font-bold text-blue-400 flex items-center leading-tight">
+                <svg class="w-6 h-6 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                HTTP 演進展示
+            </h1>
+            <p class="text-gray-400 text-xs mt-2">觀察連線建立的握手過程 (SYN/ACK) 以及封包的 TTL (Time To Live)。</p>
+        </div>
+
+        <div class="p-6 flex-1 flex flex-col overflow-y-auto">
+            <!-- 速度控制區 -->
+            <div class="mb-6 bg-gray-900 p-4 rounded-xl border border-gray-700 shadow-inner">
+                <div class="flex justify-between items-center mb-2">
+                    <label class="text-sm font-medium text-gray-300">動畫速度</label>
+                    <span id="speed-label" class="text-xs font-bold text-blue-400 bg-blue-900/30 px-2 py-1 rounded">1.0x</span>
+                </div>
+                <input type="range" id="speed-slider" min="0.2" max="3.0" step="0.1" value="1.0">
+                <div class="flex justify-between text-[10px] text-gray-500 mt-1">
+                    <span>慢 (0.2x)</span>
+                    <span>快 (3.0x)</span>
+                </div>
+            </div>
+
+            <!-- 版本選擇區 -->
+            <div class="space-y-3 mb-6">
+                <button id="btn-http10" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-blue-600 text-white font-semibold transition-all shadow-md border border-blue-500 text-sm">
+                    HTTP/1.0 (短連線)
+                </button>
+                <button id="btn-http11" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white transition-all border border-transparent text-sm">
+                    HTTP/1.1 (持久連線)
+                </button>
+                <button id="btn-http2" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white transition-all border border-transparent text-sm">
+                    HTTP/2 (多路復用)
+                </button>
+                <button id="btn-http3" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white transition-all border border-transparent text-sm">
+                    HTTP/3 (QUIC)
+                </button>
+            </div>
+
+            <div class="flex-1 bg-gray-900 rounded-xl p-5 border border-gray-700 shadow-inner overflow-y-auto min-h-[120px]">
+                <h2 id="desc-title" class="text-lg font-bold mb-3 text-emerald-400">HTTP/1.0</h2>
+                <p id="desc-text" class="text-gray-300 leading-relaxed text-xs">
+                    在 HTTP/1.0 中，每次請求都必須建立全新的 TCP 連線。你會看到每次傳輸前都有明顯的「三次握手 (SYN -> SYN-ACK -> ACK)」。這導致極高的延遲。
+                </p>
+            </div>
+        </div>
+
+        <div class="p-6 border-t border-gray-700 bg-gray-800">
+            <button id="btn-start" class="w-full bg-blue-600 hover:bg-blue-500 py-3 rounded-lg font-bold text-base transition-all shadow-[0_0_15px_rgba(37,99,235,0.4)] hover:shadow-[0_0_20px_rgba(37,99,235,0.6)]">
+                開始演示 ▶
+            </button>
+        </div>
+    </div>
+
+    <!-- 畫布與視覺化區域 -->
+    <div class="flex-1 relative bg-gray-950 flex flex-col" id="canvas-container">
+        <!-- 圖例 -->
+        <div class="absolute top-6 left-1/2 transform -translate-x-1/2 flex flex-wrap justify-center gap-4 z-10 bg-gray-800/90 px-6 py-3 rounded-full backdrop-blur-md border border-gray-600 shadow-xl text-xs font-medium">
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-yellow-400 mr-2 shadow-[0_0_8px_#facc15]"></div>握手/控制</div>
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-red-500 mr-2 shadow-[0_0_8px_#ef4444]"></div>文件 A</div>
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-emerald-500 mr-2 shadow-[0_0_8px_#10b981]"></div>文件 B</div>
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-blue-500 mr-2 shadow-[0_0_8px_#3b82f6]"></div>文件 C</div>
+            <div class="border-l border-gray-500 pl-4 flex items-center">
+                <div class="w-2.5 h-2.5 rounded-full bg-white mr-2 shadow-[0_0_8px_#ffffff]"></div>請求
+            </div>
+            <div class="flex items-center">
+                <div class="w-2.5 h-2.5 bg-white mr-2 shadow-[0_0_8px_#ffffff]"></div>回應
+            </div>
+        </div>
+
+        <canvas id="simulationCanvas" class="w-full h-full block"></canvas>
+    </div>
+
+    <script>
+        // --- 核心設定與狀態 ---
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedLabel = document.getElementById('speed-label');
+
+        const protocols = {
+            'http10': {
+                title: 'HTTP/1.0 (短連線)',
+                desc: '每次發送請求都必須經歷 TCP 三次握手 (SYN, SYN-ACK, ACK)。伺服器回傳資料後，連線立刻關閉。每個文件都需要重複這個極度耗時的過程。封包旁邊顯示模擬的 TTL (存活時間) 遞減。',
+                btnId: 'btn-http10'
+            },
+            'http11': {
+                title: 'HTTP/1.1 (持久連線)',
+                desc: '建立一次 TCP 三次握手後，連線保持開啟 (Keep-Alive)。後續的請求可以直接發送，省去握手時間。但受限於「隊頭阻塞」，伺服器必須按順序回覆。',
+                btnId: 'btn-http11'
+            },
+            'http2': {
+                title: 'HTTP/2 (多路復用)',
+                desc: '經過一次 TCP 握手 (通常伴隨 TLS 握手，這裡簡化呈現) 後，資料被分割成二進制框架。多個請求和回應可以在同一個連線中交錯傳輸 (Multiplexing)，解決了 HTTP 層的隊頭阻塞。',
+                btnId: 'btn-http2'
+            },
+            'http3': {
+                title: 'HTTP/3 (QUIC)',
+                desc: '基於 UDP。QUIC 整合了加密與連線握手，實現 1-RTT 甚至 0-RTT 的極速連線 (Client Hello + SYN 等合併)。不同資料流獨立傳輸，解決了 TCP 層的隊頭阻塞。',
+                btnId: 'btn-http3'
+            }
+        };
+
+        const filesDef = [
+            { id: 'A', color: '#EF4444' }, // Red
+            { id: 'B', color: '#10B981' }, // Green
+            { id: 'C', color: '#3B82F6' }  // Blue
+        ];
+
+        let currentProtocol = 'http10';
+        let currentSimId = 0;
+        let packets = [];
+        let connections = [];
+        
+        // 全局速度乘數
+        let globalSpeedMultiplier = parseFloat(speedSlider.value);
+
+        // 監聽速度滑桿改變
+        speedSlider.addEventListener('input', (e) => {
+            globalSpeedMultiplier = parseFloat(e.target.value);
+            speedLabel.innerText = `${globalSpeedMultiplier.toFixed(1)}x`;
+            // 即時更新畫面上現有封包的速度
+            packets.forEach(p => p.updateSpeed(globalSpeedMultiplier));
+        });
+
+        // --- Canvas 尺寸管理 ---
+        function resizeCanvas() {
+            const rect = container.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            canvas.style.width = `${rect.width}px`;
+            canvas.style.height = `${rect.height}px`;
+            canvas.logicalWidth = rect.width;
+            canvas.logicalHeight = rect.height;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function getClientX() { return 150; }
+        function getServerX() { return canvas.logicalWidth - 150; }
+        function getCenterY() { return canvas.logicalHeight / 2 + 20; }
+
+        // --- 核心類別 ---
+        class Connection {
+            constructor(id, y, label, isUDP = false) {
+                this.id = id;
+                this.y = y;
+                this.label = label;
+                this.isUDP = isUDP;
+                this.alpha = 0;
+                this.targetAlpha = 1;
+            }
+            update() {
+                // 連線淡入淡出速度不隨滑桿改變，保持視覺穩定
+                this.alpha += (this.targetAlpha - this.alpha) * 0.1;
+            }
+            draw(ctx, clientX, serverX) {
+                if (this.alpha <= 0.01) return;
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.moveTo(clientX, this.y);
+                ctx.lineTo(serverX, this.y);
+                ctx.lineWidth = 30;
+                ctx.strokeStyle = this.isUDP ? '#334155' : '#1e293b'; 
+                
+                if (this.isUDP) ctx.setLineDash([15, 10]);
+                else ctx.setLineDash([]);
+                
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                ctx.fillStyle = '#9CA3AF';
+                ctx.font = '12px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.label, (clientX + serverX) / 2, this.y - 20);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        class Packet {
+            constructor(startX, startY, targetX, targetY, color, isRequest, text, initialTtl, baseSpeedModifier = 1, onComplete) {
+                this.x = startX;
+                this.y = startY;
+                this.targetX = targetX;
+                this.targetY = targetY;
+                this.color = color;
+                this.isRequest = isRequest;
+                this.text = text;
+                this.ttl = initialTtl || Math.floor(Math.random() * 20) + 50; 
+                this.onComplete = onComplete;
+                this.baseSpeedModifier = baseSpeedModifier;
+                
+                this.dx = targetX - startX;
+                this.dy = targetY - startY;
+                this.totalDist = Math.hypot(this.dx, this.dy);
+                
+                // 基礎速度 (70 幀跑完全程)
+                this.baseSpeed = (this.totalDist / 70) * this.baseSpeedModifier;
+                
+                this.updateSpeed(globalSpeedMultiplier);
+                
+                this.history = [];
+                this.finished = false;
+            }
+
+            updateSpeed(globalMultiplier) {
+                this.currentSpeed = this.baseSpeed * globalMultiplier;
+                this.vx = (this.dx / this.totalDist) * this.currentSpeed;
+                this.vy = (this.dy / this.totalDist) * this.currentSpeed;
+            }
+
+            update() {
+                if (this.finished) return;
+                
+                this.history.push({x: this.x, y: this.y});
+                if (this.history.length > 8) this.history.shift();
+
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // 模擬 TTL 隨傳輸遞減 (考量速度倍率，確保遞減機率相對穩定)
+                if (Math.random() < 0.05 * globalSpeedMultiplier) {
+                    this.ttl = Math.max(1, this.ttl - 1);
+                }
+
+                const distToTarget = Math.hypot(this.targetX - this.x, this.targetY - this.y);
+                if (distToTarget <= this.currentSpeed) {
+                    this.x = this.targetX;
+                    this.y = this.targetY;
+                    this.finished = true;
+                    if (this.onComplete) this.onComplete();
+                }
+            }
+
+            draw(ctx) {
+                if (this.finished) return;
+                
+                if (this.history.length > 0) {
+                    ctx.beginPath();
+                    ctx.moveTo(this.history[0].x, this.history[0].y);
+                    for(let i=1; i<this.history.length; i++) {
+                        ctx.lineTo(this.history[i].x, this.history[i].y);
+                    }
+                    ctx.lineTo(this.x, this.y);
+                    ctx.strokeStyle = this.color;
+                    ctx.globalAlpha = 0.5;
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                    ctx.globalAlpha = 1.0;
+                }
+
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = this.color;
+                ctx.shadowBlur = 10;
+                
+                if (this.isRequest) {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    ctx.fillRect(this.x - 6, this.y - 6, 12, 12);
+                }
+                ctx.shadowBlur = 0;
+
+                ctx.fillStyle = '#E2E8F0';
+                ctx.font = '10px monospace';
+                ctx.textAlign = 'center';
+                let labelY = this.y - 12;
+                
+                if (this.vy > 0 && Math.abs(this.vy) > Math.abs(this.vx)) {
+                     labelY = this.y + 20;
+                }
+
+                if (this.text) {
+                    ctx.fillText(this.text, this.x, labelY);
+                    ctx.fillStyle = '#9CA3AF';
+                    ctx.font = '9px monospace';
+                    ctx.fillText(`TTL:${this.ttl}`, this.x, labelY - 10);
+                } else {
+                    ctx.fillStyle = '#9CA3AF';
+                    ctx.font = '9px monospace';
+                    ctx.fillText(`TTL:${this.ttl}`, this.x, labelY);
+                }
+            }
+        }
+
+        // --- 動畫輔助函數 ---
+        
+        // 考量全局速度的等待函數
+        async function sleep(baseMs, simId) {
+            return new Promise(resolve => {
+                // 動態計算實際等待時間，避免速度太快時完全沒有間隔，最低設定為 10ms
+                const actualMs = Math.max(10, baseMs / globalSpeedMultiplier);
+                setTimeout(() => { resolve(simId === currentSimId); }, actualMs);
+            });
+        }
+
+        function spawnPacket(startX, startY, endX, endY, color, isRequest, text, ttl, baseSpeedModifier, simId) {
+            return new Promise(resolve => {
+                let p = new Packet(startX, startY, endX, endY, color, isRequest, text, ttl, baseSpeedModifier, () => {
+                    if (simId === currentSimId) resolve(true);
+                });
+                packets.push(p);
+            });
+        }
+
+        // --- 繪圖函數 ---
+        function drawGrid(ctx) {
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            const spacing = 40;
+            for(let x=0; x<canvas.logicalWidth; x+=spacing) {
+                ctx.moveTo(x, 0); ctx.lineTo(x, canvas.logicalHeight);
+            }
+            for(let y=0; y<canvas.logicalHeight; y+=spacing) {
+                ctx.moveTo(0, y); ctx.lineTo(canvas.logicalWidth, y);
+            }
+            ctx.stroke();
+        }
+
+        function drawNodes(ctx) {
+            const cx = getClientX();
+            const sx = getServerX();
+            const cy = getCenterY();
+            const h = 260;
+            const w = 120;
+            
+            // Client
+            ctx.fillStyle = '#1e3a8a';
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(cx - w/2, cy - h/2, w, h, 12);
+            ctx.fill(); ctx.stroke();
+            
+            ctx.fillStyle = '#e0e7ff';
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('客戶端', cx, cy - h/2 + 35);
+            ctx.font = '12px sans-serif';
+            ctx.fillStyle = '#93c5fd';
+            ctx.fillText('Browser', cx, cy - h/2 + 55);
+            
+            ctx.fillStyle = '#EF4444'; ctx.beginPath(); ctx.arc(cx - 30, cy - h/2 + 15, 4, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#F59E0B'; ctx.beginPath(); ctx.arc(cx - 15, cy - h/2 + 15, 4, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#10B981'; ctx.beginPath(); ctx.arc(cx, cy - h/2 + 15, 4, 0, Math.PI*2); ctx.fill();
+
+            // Server
+            ctx.fillStyle = '#4c1d95';
+            ctx.strokeStyle = '#8b5cf6';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(sx - w/2, cy - h/2, w, h, 12);
+            ctx.fill(); ctx.stroke();
+            
+            ctx.fillStyle = '#ede9fe';
+            ctx.font = 'bold 16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('伺服器', sx, cy - h/2 + 35);
+            ctx.font = '12px sans-serif';
+            ctx.fillStyle = '#c4b5fd';
+            ctx.fillText('Web Server', sx, cy - h/2 + 55);
+            
+            ctx.fillStyle = '#6d28d9';
+            ctx.fillRect(sx - 35, cy - 40, 70, 24);
+            ctx.fillRect(sx - 35, cy, 70, 24);
+            ctx.fillRect(sx - 35, cy + 40, 70, 24);
+            ctx.fillStyle = '#a78bfa';
+            ctx.beginPath(); ctx.arc(sx - 20, cy - 28, 3, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(sx - 20, cy + 12, 3, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(sx - 20, cy + 52, 3, 0, Math.PI*2); ctx.fill();
+        }
+
+        function animationLoop() {
+            if(!canvas.logicalWidth) return requestAnimationFrame(animationLoop);
+
+            ctx.clearRect(0, 0, canvas.logicalWidth, canvas.logicalHeight);
+            drawGrid(ctx);
+
+            connections.forEach(c => {
+                c.update();
+                c.draw(ctx, getClientX(), getServerX());
+            });
+            
+            for (let i = packets.length - 1; i >= 0; i--) {
+                let p = packets[i];
+                p.update();
+                p.draw(ctx);
+                if (p.finished) packets.splice(i, 1);
+            }
+            
+            drawNodes(ctx);
+            requestAnimationFrame(animationLoop);
+        }
+
+        // --- 握手巨集 ---
+        const HANDSHAKE_COLOR = '#FACC15';
+
+        async function performTCPHandshake(y, simId) {
+            let conn = new Connection('c', y, '建立 TCP 連線中...');
+            connections.push(conn);
+            
+            await spawnPacket(getClientX(), y, getServerX(), y, HANDSHAKE_COLOR, true, 'SYN', 64, 1.2, simId);
+            if (!(await sleep(100, simId))) return false;
+            
+            await spawnPacket(getServerX(), y, getClientX(), y, HANDSHAKE_COLOR, false, 'SYN-ACK', 63, 1.2, simId);
+            if (!(await sleep(100, simId))) return false;
+
+            await spawnPacket(getClientX(), y, getServerX(), y, HANDSHAKE_COLOR, true, 'ACK', 64, 1.2, simId);
+            
+            conn.label = 'TCP 連線已建立';
+            if (!(await sleep(200, simId))) return false;
+            return conn;
+        }
+
+        // --- 協議模擬流程 ---
+        
+        async function runHttp10(simId) {
+            for (let file of filesDef) {
+                let y = getCenterY();
+                let conn = await performTCPHandshake(y, simId);
+                if (!conn) return;
+                
+                conn.label = `TCP 連線 (傳送 ${file.id})`;
+                
+                await spawnPacket(getClientX(), y, getServerX(), y, file.color, true, `GET /${file.id}`, 64, 1, simId);
+                if (!(await sleep(200, simId))) return; 
+                
+                for(let i=0; i<3; i++) {
+                    let text = i === 0 ? `200 OK (${file.id})` : `Data (${file.id})`;
+                    let p = spawnPacket(getServerX(), y, getClientX(), y, file.color, false, text, 63, 1, simId);
+                    if (i === 2) await p; 
+                    else if (!(await sleep(300, simId))) return;
+                }
+                
+                if (!(await sleep(200, simId))) return;
+                await spawnPacket(getServerX(), y, getClientX(), y, HANDSHAKE_COLOR, false, 'FIN', 63, 1.5, simId);
+                conn.targetAlpha = 0; 
+                if (!(await sleep(400, simId))) return;
+                connections = [];
+                if (!(await sleep(200, simId))) return;
+            }
+        }
+
+        async function runHttp11(simId) {
+            let y = getCenterY();
+            let conn = await performTCPHandshake(y, simId);
+            if (!conn) return;
+            
+            conn.label = 'TCP 持久連線 (Keep-Alive)';
+            
+            for (let file of filesDef) {
+                await spawnPacket(getClientX(), y, getServerX(), y, file.color, true, `GET /${file.id}`, 64, 1, simId);
+                if (!(await sleep(150, simId))) return;
+                
+                for(let i=0; i<3; i++) {
+                    let text = i === 0 ? `200 OK (${file.id})` : null;
+                    let p = spawnPacket(getServerX(), y, getClientX(), y, file.color, false, text, 63, 1, simId);
+                    if (i === 2) await p; 
+                    else if (!(await sleep(200, simId))) return;
+                }
+                if (!(await sleep(150, simId))) return;
+            }
+            
+            if (!(await sleep(500, simId))) return;
+            conn.targetAlpha = 0;
+            connections = [];
+        }
+
+        async function runHttp2(simId) {
+            let y = getCenterY();
+            let conn = await performTCPHandshake(y, simId);
+            if (!conn) return;
+            
+            conn.label = '單一 TCP 連線 (多路復用)';
+            
+            await spawnPacket(getClientX(), y, getServerX(), y, HANDSHAKE_COLOR, true, 'SETTINGS', 64, 1.5, simId);
+            
+            let reqPromises = filesDef.map((f, i) => {
+                return new Promise(async (resolve) => {
+                    if (!(await sleep(i * 150, simId))) return;
+                    spawnPacket(getClientX(), y, getServerX(), y, f.color, true, `GET /${f.id} (S${i+1})`, 64, 1, simId).then(resolve);
+                });
+            });
+            
+            await Promise.all(reqPromises);
+            if (!(await sleep(200, simId))) return; 
+            
+            let resPromises = [];
+            for(let chunk=0; chunk<3; chunk++) {
+                for(let i=0; i<3; i++) {
+                    let file = filesDef[i];
+                    let p = new Promise(async (resolve) => {
+                        if (!(await sleep((chunk*3 + i) * 100, simId))) return;
+                        let text = chunk === 0 ? `HEAD (S${i+1})` : `DATA (S${i+1})`;
+                        spawnPacket(getServerX(), y, getClientX(), y, file.color, false, text, 63, 1, simId).then(resolve);
+                    });
+                    resPromises.push(p);
+                }
+            }
+            await Promise.all(resPromises);
+            
+            if (!(await sleep(600, simId))) return;
+            conn.targetAlpha = 0;
+            connections = [];
+        }
+
+        async function runHttp3(simId) {
+            let y = getCenterY();
+            let offsets = [-70, 0, 70];
+            
+            let mainConn = new Connection('c_main', y, 'QUIC 連線建立 (UDP)', true);
+            connections.push(mainConn);
+            
+            await spawnPacket(getClientX(), y, getServerX(), y, HANDSHAKE_COLOR, true, 'ClientHello+Key', 64, 1.5, simId);
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getServerX(), y, getClientX(), y, HANDSHAKE_COLOR, false, 'ServerHello+Ready', 63, 1.5, simId);
+            if (!(await sleep(100, simId))) return;
+
+            mainConn.targetAlpha = 0;
+
+            for(let i=0; i<3; i++) {
+                connections.push(new Connection(`c${i}`, y + offsets[i], `QUIC Stream ${i+1}`, true));
+            }
+            if (!(await sleep(200, simId))) return;
+            
+            let reqPromises = filesDef.map((f, i) => {
+                return new Promise(async (resolve) => {
+                    if (!(await sleep(i * 80, simId))) return;
+                    spawnPacket(getClientX(), y + offsets[i], getServerX(), y + offsets[i], f.color, true, `GET /${f.id}`, 64, 1, simId).then(resolve);
+                });
+            });
+            
+            await Promise.all(reqPromises);
+            if (!(await sleep(150, simId))) return;
+            
+            let resPromises = [];
+            for(let chunk=0; chunk<3; chunk++) {
+                for(let i=0; i<3; i++) {
+                    let file = filesDef[i];
+                    let p = new Promise(async (resolve) => {
+                        if (!(await sleep(chunk * 180 + (i * 30), simId))) return;
+                        let text = chunk === 0 ? `200 OK` : `Data`;
+                        spawnPacket(getServerX(), y + offsets[i], getClientX(), y + offsets[i], file.color, false, text, 63, 1, simId).then(resolve);
+                    });
+                    resPromises.push(p);
+                }
+            }
+            await Promise.all(resPromises);
+            
+            if (!(await sleep(600, simId))) return;
+            connections.forEach(c => c.targetAlpha = 0);
+            if (!(await sleep(400, simId))) return;
+            connections = [];
+        }
+
+        // --- UI 控制 ---
+        function setProtocol(p) {
+            currentProtocol = p;
+            currentSimId++;
+            packets = [];
+            connections = [];
+            
+            document.querySelectorAll('.protocol-btn').forEach(btn => {
+                if (btn.id === `btn-${p}`) {
+                    btn.className = 'protocol-btn w-full text-left px-4 py-3 rounded-lg bg-blue-600 text-white font-semibold transition-all shadow-md border border-blue-500 text-sm';
+                } else {
+                    btn.className = 'protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white transition-all border border-transparent text-sm';
+                }
+            });
+            
+            const info = protocols[p];
+            document.getElementById('desc-title').innerText = info.title;
+            document.getElementById('desc-text').innerText = info.desc;
+            
+            const startBtn = document.getElementById('btn-start');
+            startBtn.disabled = false;
+            startBtn.innerHTML = '開始演示 ▶';
+            startBtn.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-blue-800');
+            startBtn.classList.add('bg-blue-600', 'hover:bg-blue-500');
+        }
+
+        async function startSimulation() {
+            currentSimId++;
+            packets = [];
+            connections = [];
+            let simId = currentSimId;
+            
+            const btn = document.getElementById('btn-start');
+            btn.disabled = true;
+            btn.innerHTML = '演示中... <span class="animate-pulse">⏳</span>';
+            btn.classList.add('opacity-50', 'cursor-not-allowed', 'bg-blue-800');
+            btn.classList.remove('bg-blue-600', 'hover:bg-blue-500');
+            
+            if (currentProtocol === 'http10') await runHttp10(simId);
+            else if (currentProtocol === 'http11') await runHttp11(simId);
+            else if (currentProtocol === 'http2') await runHttp2(simId);
+            else if (currentProtocol === 'http3') await runHttp3(simId);
+            
+            if (simId === currentSimId) {
+                btn.disabled = false;
+                btn.innerHTML = '重新開始 ↺';
+                btn.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-blue-800');
+                btn.classList.add('bg-blue-600', 'hover:bg-blue-500');
+            }
+        }
+
+        document.querySelectorAll('.protocol-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => setProtocol(e.target.id.replace('btn-', '')));
+        });
+        document.getElementById('btn-start').addEventListener('click', startSimulation);
+
+        // 啟動渲染
+        requestAnimationFrame(animationLoop);
+
+    </script>
+</body>
+</html>
