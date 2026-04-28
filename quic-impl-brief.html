@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QUIC 與 UDP 連線機制展示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        .no-select { user-select: none; }
+        
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #8b5cf6; cursor: pointer; margin-top: -6px; box-shadow: 0 0 10px rgba(139, 92, 246, 0.5); }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: #4b5563; border-radius: 2px; }
+        input[type=range]:focus { outline: none; }
+        
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans h-screen overflow-hidden flex no-select">
+
+    <!-- 側邊控制欄 -->
+    <div class="w-80 bg-gray-800 flex flex-col shadow-2xl z-20 border-r border-gray-700 flex-shrink-0">
+        <div class="p-6 pb-4 border-b border-gray-700">
+            <h1 class="text-xl font-bold text-purple-400 flex items-center leading-tight">
+                <svg class="w-6 h-6 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                QUIC 底層機制解析
+            </h1>
+            <p class="text-gray-400 text-xs mt-2">探索 QUIC 如何在無連線的 UDP 上建立狀態，並實現極速握手與網路無縫切換。</p>
+        </div>
+
+        <div class="p-6 flex-1 flex flex-col overflow-y-auto">
+            <div class="mb-6 bg-gray-900 p-4 rounded-xl border border-gray-700 shadow-inner">
+                <div class="flex justify-between items-center mb-2">
+                    <label class="text-sm font-medium text-gray-300">動畫速度</label>
+                    <span id="speed-label" class="text-xs font-bold text-purple-400 bg-purple-900/30 px-2 py-1 rounded">1.0x</span>
+                </div>
+                <input type="range" id="speed-slider" min="0.2" max="3.0" step="0.1" value="1.0">
+            </div>
+
+            <!-- 模式選擇 -->
+            <div class="space-y-3 mb-6">
+                <button id="btn-tcp" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition-all border border-transparent text-sm">
+                    1. 傳統 TCP + TLS 握手
+                </button>
+                <button id="btn-quic" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-purple-600 text-white font-semibold transition-all shadow-md border border-purple-500 text-sm">
+                    2. QUIC (UDP) 1-RTT 握手
+                </button>
+                <button id="btn-migration" class="protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition-all border border-transparent text-sm">
+                    3. QUIC 連線遷移 (Wi-Fi 轉 4G)
+                </button>
+            </div>
+
+            <!-- 說明面板 -->
+            <div class="flex-1 bg-gray-900 rounded-xl p-5 border border-gray-700 shadow-inner overflow-y-auto min-h-[160px]">
+                <h2 id="desc-title" class="text-lg font-bold mb-3 text-purple-400">QUIC (UDP) 1-RTT 握手</h2>
+                <p id="desc-text" class="text-gray-300 leading-relaxed text-xs">
+                    UDP 本身沒有握手。QUIC 將「建立傳輸連線」與「TLS 1.3 密鑰交換」合併打包在同一個 UDP 封包中。只需 1 個 RTT (往返)，雙方就能確認身份並開始加密傳輸資料，大幅降低延遲。
+                </p>
+            </div>
+        </div>
+
+        <div class="p-6 border-t border-gray-700 bg-gray-800">
+            <button id="btn-start" class="w-full bg-purple-600 hover:bg-purple-500 py-3 rounded-lg font-bold text-base transition-all shadow-[0_0_15px_rgba(139,92,246,0.4)] hover:shadow-[0_0_20px_rgba(139,92,246,0.6)] text-white">
+                開始演示 ▶
+            </button>
+        </div>
+    </div>
+
+    <!-- 畫布與視覺化區域 -->
+    <div class="flex-1 relative bg-gray-950 flex flex-col items-center justify-center" id="canvas-container">
+        
+        <!-- RTT 計數器 (背景大字) -->
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+            <div id="rtt-counter" class="text-[12rem] font-bold text-gray-800/40 tracking-tighter transition-all duration-300">0 RTT</div>
+        </div>
+
+        <!-- 圖例 -->
+        <div class="absolute top-6 left-1/2 transform -translate-x-1/2 flex flex-wrap justify-center gap-4 z-10 bg-gray-800/90 px-6 py-3 rounded-full backdrop-blur-md border border-gray-600 shadow-xl text-xs font-medium">
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-yellow-400 mr-2"></div>TCP 握手</div>
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-pink-500 mr-2"></div>TLS 安全握手</div>
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-purple-400 mr-2"></div>QUIC 綜合握手</div>
+            <div class="flex items-center"><div class="w-2.5 h-2.5 rounded-full bg-blue-400 mr-2"></div>應用資料</div>
+        </div>
+
+        <canvas id="simulationCanvas" class="w-full h-full block z-10 relative"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedLabel = document.getElementById('speed-label');
+        const rttCounter = document.getElementById('rtt-counter');
+
+        const protocols = {
+            'tcp': {
+                title: '傳統 TCP + TLS 握手',
+                desc: '在發送 HTTP 資料前，必須先進行 TCP 三次握手 (1-RTT) 確認網路暢通，接著進行 TLS 密鑰交換 (1~2 RTT) 確保安全。總共需要消耗 2 到 3 個 RTT 的時間，資料才能真正開始傳輸。',
+                btnId: 'btn-tcp',
+                themeClass: 'bg-yellow-600 hover:bg-yellow-500 border-yellow-500'
+            },
+            'quic': {
+                title: 'QUIC 1-RTT 握手',
+                desc: '因為 UDP 不管連線，QUIC 協定直接把「宣告我要連線 (Client Hello)」與「TLS 1.3 密鑰參數」打包進第一個 UDP 封包。伺服器收到後立刻回傳公鑰與確認。只要 1 個 RTT，後續資料就能加密傳輸！',
+                btnId: 'btn-quic',
+                themeClass: 'bg-purple-600 hover:bg-purple-500 border-purple-500'
+            },
+            'migration': {
+                title: 'QUIC 連線遷移 (IP 切換)',
+                desc: '傳統 TCP 依靠 (來源IP, 來源Port, 目的IP, 目的Port) 來辨識連線。如果手機從 Wi-Fi 切換到 4G，IP 變了，TCP 連線必定中斷重連。而 QUIC 封包標頭帶有獨立的 Connection ID (CID)，即使 IP 改變，伺服器也能認出這是同一個連線，實現無縫切換！',
+                btnId: 'btn-migration',
+                themeClass: 'bg-blue-600 hover:bg-blue-500 border-blue-500'
+            }
+        };
+
+        const COLOR_TCP = '#FACC15';     
+        const COLOR_TLS = '#EC4899';    
+        const COLOR_QUIC = '#A78BFA';   
+        const COLOR_DATA = '#60A5FA';    
+        const COLOR_FAIL = '#EF4444';
+
+        let currentProtocol = 'quic';
+        let currentSimId = 0;
+        let packets = [];
+        let connections = [];
+        let globalSpeedMultiplier = parseFloat(speedSlider.value);
+        let currentRTT = 0;
+        let clientNetwork = 'Wi-Fi (192.168.1.10)';
+
+        speedSlider.addEventListener('input', (e) => {
+            globalSpeedMultiplier = parseFloat(e.target.value);
+            speedLabel.innerText = `${globalSpeedMultiplier.toFixed(1)}x`;
+            packets.forEach(p => p.updateSpeed(globalSpeedMultiplier));
+        });
+
+        function resizeCanvas() {
+            const rect = container.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            canvas.style.width = `${rect.width}px`;
+            canvas.style.height = `${rect.height}px`;
+            canvas.logicalWidth = rect.width;
+            canvas.logicalHeight = rect.height;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function getClientX() { return 160; }
+        function getServerX() { return canvas.logicalWidth - 160; }
+        function getCenterY() { return canvas.logicalHeight / 2 + 20; }
+
+        function setRTT(val) {
+            currentRTT = val;
+            rttCounter.innerText = `${val} RTT`;
+            rttCounter.classList.remove('scale-110', 'text-gray-700/60');
+            // Trigger animation
+            void rttCounter.offsetWidth; 
+            rttCounter.classList.add('scale-110', 'text-gray-700/60');
+            setTimeout(() => { rttCounter.classList.remove('scale-110', 'text-gray-700/60'); }, 300);
+        }
+
+        class Connection {
+            constructor(id, y, label, type = 'tcp') {
+                this.id = id;
+                this.y = y;
+                this.label = label;
+                this.type = type; // 'tcp', 'udp', 'quic'
+                this.alpha = 0;
+                this.targetAlpha = 1;
+            }
+            update() { this.alpha += (this.targetAlpha - this.alpha) * 0.1; }
+            draw(ctx, clientX, serverX) {
+                if (this.alpha <= 0.01) return;
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.moveTo(clientX, this.y);
+                ctx.lineTo(serverX, this.y);
+                
+                if (this.type === 'tcp') {
+                    ctx.lineWidth = 24;
+                    ctx.strokeStyle = '#1e293b'; 
+                    ctx.setLineDash([]);
+                } else if (this.type === 'quic') {
+                    ctx.lineWidth = 36;
+                    ctx.strokeStyle = '#2e1065'; // 深紫
+                    ctx.setLineDash([15, 10]);
+                    ctx.shadowColor = '#8b5cf6';
+                    ctx.shadowBlur = 10;
+                }
+
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.shadowBlur = 0;
+                
+                ctx.fillStyle = this.type === 'quic' ? '#c4b5fd' : '#9CA3AF';
+                ctx.font = 'bold 13px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(this.label, (clientX + serverX) / 2, this.y - (this.type==='quic'?22:15));
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        class Packet {
+            constructor(startX, startY, targetX, targetY, color, text, subtext, cid, isFailed, baseSpeedMod, onComplete) {
+                this.x = startX; this.y = startY;
+                this.targetX = targetX; this.targetY = targetY;
+                this.color = color;
+                this.text = text;
+                this.subtext = subtext;
+                this.cid = cid; // Connection ID
+                this.isFailed = isFailed;
+                this.onComplete = onComplete;
+                this.baseSpeedModifier = baseSpeedMod;
+                
+                this.dx = targetX - startX;
+                this.dy = targetY - startY;
+                this.totalDist = Math.hypot(this.dx, this.dy);
+                this.baseSpeed = (this.totalDist / 60) * this.baseSpeedModifier;
+                this.updateSpeed(globalSpeedMultiplier);
+                
+                this.history = [];
+                this.finished = false;
+                this.progress = 0;
+            }
+
+            updateSpeed(mult) {
+                this.currentSpeed = this.baseSpeed * mult;
+                this.vx = (this.dx / this.totalDist) * this.currentSpeed;
+                this.vy = (this.dy / this.totalDist) * this.currentSpeed;
+            }
+
+            update() {
+                if (this.finished) return;
+                
+                this.history.push({x: this.x, y: this.y});
+                if (this.history.length > 8) this.history.shift();
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.progress += this.currentSpeed;
+
+                if (this.isFailed && this.progress >= this.totalDist * 0.45) {
+                    // 模擬被丟棄/失敗
+                    this.finished = true;
+                    if (this.onComplete) this.onComplete(false);
+                    return;
+                }
+
+                if (this.progress >= this.totalDist) {
+                    this.x = this.targetX; this.y = this.targetY;
+                    this.finished = true;
+                    if (this.onComplete) this.onComplete(true);
+                }
+            }
+
+            draw(ctx) {
+                if (this.finished) {
+                    if (this.isFailed) {
+                        ctx.fillStyle = COLOR_FAIL;
+                        ctx.font = 'bold 20px sans-serif';
+                        ctx.fillText('✖', this.x, this.y);
+                    }
+                    return;
+                }
+                
+                if (this.history.length > 0) {
+                    ctx.beginPath();
+                    ctx.moveTo(this.history[0].x, this.history[0].y);
+                    for(let i=1; i<this.history.length; i++) ctx.lineTo(this.history[i].x, this.history[i].y);
+                    ctx.lineTo(this.x, this.y);
+                    ctx.strokeStyle = this.color; ctx.globalAlpha = 0.5; ctx.lineWidth = 4; ctx.stroke(); ctx.globalAlpha = 1.0;
+                }
+
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = this.color; ctx.shadowBlur = 15;
+                
+                // 畫封包 (UDP通常以方塊表示，裡面包著狀態)
+                ctx.beginPath();
+                ctx.roundRect(this.x - 10, this.y - 10, 20, 20, 4);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // 文字
+                ctx.fillStyle = '#fff'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center';
+                let labelY = this.y - 18;
+                if (this.vx < 0) labelY = this.y + 26; // 回傳的放下方
+                
+                ctx.fillText(this.text, this.x, labelY);
+                if (this.subtext) {
+                    ctx.fillStyle = '#9CA3AF'; ctx.font = '10px monospace';
+                    ctx.fillText(this.subtext, this.x, labelY - (this.vx < 0 ? -12 : 12));
+                }
+                
+                // Connection ID 標記 (QUIC 專屬)
+                if (this.cid) {
+                    ctx.fillStyle = '#FBBF24'; // 琥珀色
+                    ctx.font = 'bold 9px monospace';
+                    ctx.fillText(`CID:${this.cid}`, this.x, this.y + 4);
+                }
+            }
+        }
+
+        async function sleep(baseMs, simId) {
+            return new Promise(resolve => {
+                const actualMs = Math.max(10, baseMs / globalSpeedMultiplier);
+                setTimeout(() => { resolve(simId === currentSimId); }, actualMs);
+            });
+        }
+
+        function spawnPacket(sX, sY, tX, tY, color, text, sub, cid, isFailed, speed, simId) {
+            return new Promise(resolve => {
+                let p = new Packet(sX, sY, tX, tY, color, text, sub, cid, isFailed, speed, (success) => {
+                    if (simId === currentSimId) resolve(success);
+                });
+                packets.push(p);
+            });
+        }
+
+        // --- 繪製 ---
+        function drawGrid(ctx) {
+            ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1; ctx.beginPath();
+            for(let x=0; x<canvas.logicalWidth; x+=40) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.logicalHeight); }
+            for(let y=0; y<canvas.logicalHeight; y+=40) { ctx.moveTo(0, y); ctx.lineTo(canvas.logicalWidth, y); }
+            ctx.stroke();
+        }
+
+        function drawNodes(ctx) {
+            const cx = getClientX(); const sx = getServerX(); const cy = getCenterY();
+            const h = 200; const w = 140;
+            
+            // Client
+            ctx.fillStyle = '#1e3a8a'; ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.roundRect(cx - w/2, cy - h/2, w, h, 12); ctx.fill(); ctx.stroke();
+            
+            ctx.fillStyle = '#e0e7ff'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('行動裝置 (Client)', cx, cy - h/2 + 35);
+            
+            // Client Network Status
+            ctx.fillStyle = clientNetwork.includes('Wi-Fi') ? '#10B981' : '#F59E0B';
+            ctx.beginPath(); ctx.arc(cx - 50, cy - h/2 + 65, 5, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#93c5fd'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
+            ctx.fillText(clientNetwork, cx - 40, cy - h/2 + 69);
+            
+            // Server
+            ctx.fillStyle = '#4c1d95'; ctx.strokeStyle = '#8b5cf6'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.roundRect(sx - w/2, cy - h/2, w, h, 12); ctx.fill(); ctx.stroke();
+            
+            ctx.fillStyle = '#ede9fe'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
+            ctx.fillText('Web 伺服器', sx, cy - h/2 + 35);
+            
+            ctx.fillStyle = '#10B981';
+            ctx.beginPath(); ctx.arc(sx - 50, cy - h/2 + 65, 5, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#c4b5fd'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
+            ctx.fillText('IP: 203.0.113.5', sx - 40, cy - h/2 + 69);
+        }
+
+        function animationLoop() {
+            if(!canvas.logicalWidth) return requestAnimationFrame(animationLoop);
+            ctx.clearRect(0, 0, canvas.logicalWidth, canvas.logicalHeight);
+            
+            drawGrid(ctx);
+
+            connections.forEach(c => { c.update(); c.draw(ctx, getClientX(), getServerX()); });
+            for (let i = packets.length - 1; i >= 0; i--) {
+                packets[i].update(); packets[i].draw(ctx);
+                if (packets[i].finished && !packets[i].isFailed) packets.splice(i, 1);
+            }
+            
+            drawNodes(ctx);
+            requestAnimationFrame(animationLoop);
+        }
+
+        // --- 核心展示邏輯 ---
+        
+        async function runTCPTLS(simId) {
+            let y = getCenterY();
+            let conn = new Connection('tcp', y, '建立 TCP 連線中...', 'tcp');
+            connections.push(conn);
+            
+            // 1. TCP Handshake
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_TCP, 'TCP SYN', '', null, false, 1.2, simId);
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_TCP, 'TCP SYN-ACK', '', null, false, 1.2, simId);
+            setRTT(1);
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_TCP, 'TCP ACK', '', null, false, 1.2, simId);
+            
+            conn.label = 'TCP 連線已建立，開始 TLS 握手';
+            if (!(await sleep(200, simId))) return;
+
+            // 2. TLS Handshake
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_TLS, 'TLS ClientHello', '支援加密套件', null, false, 1.2, simId);
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_TLS, 'TLS ServerHello', '憑證 + 公鑰', null, false, 1.2, simId);
+            setRTT(2);
+            if (!(await sleep(50, simId))) return;
+            
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_TLS, 'TLS KeyExchange', 'Finished', null, false, 1.2, simId);
+            conn.label = 'TCP + TLS 安全通道建立完畢';
+            if (!(await sleep(200, simId))) return;
+
+            // 3. HTTP Data
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_DATA, 'HTTP GET /', '(加密資料)', null, false, 1, simId);
+            setRTT(3);
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_DATA, 'HTTP 200 OK', '(加密網頁)', null, false, 1, simId);
+            
+            if (!(await sleep(800, simId))) return;
+            conn.targetAlpha = 0;
+        }
+
+        async function runQUIC(simId) {
+            let y = getCenterY();
+            
+            let conn = new Connection('udp', y, 'UDP 底層無連線', 'tcp');
+            conn.alpha = 0.3; conn.targetAlpha = 0.3; // UDP只是個虛擬通道
+            connections.push(conn);
+            
+            if (!(await sleep(300, simId))) return;
+
+            // QUIC 1-RTT Handshake
+            let qConn = new Connection('quic', y, 'QUIC 握手 (UDP Payload)', 'quic');
+            connections.push(qConn);
+
+            const cid = 'A8F9';
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_QUIC, 'QUIC ClientHello', '連線參數 + TLS公鑰', cid, false, 1.1, simId);
+            if (!(await sleep(50, simId))) return;
+            
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_QUIC, 'QUIC ServerHello', '憑證 + TLS確認', cid, false, 1.1, simId);
+            setRTT(1);
+            
+            qConn.label = 'QUIC 邏輯連線 (依賴 CID: A8F9)';
+            if (!(await sleep(300, simId))) return;
+
+            // HTTP/3 Data
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_DATA, 'HTTP/3 GET /', 'QUIC Frame', cid, false, 1, simId);
+            setRTT(2);
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_DATA, 'HTTP/3 200 OK', 'QUIC Frame', cid, false, 1, simId);
+
+            if (!(await sleep(800, simId))) return;
+            qConn.targetAlpha = 0; conn.targetAlpha = 0;
+        }
+
+        async function runMigration(simId) {
+            let y = getCenterY();
+            const cid = 'B47C';
+            
+            let qConn = new Connection('quic', y, 'QUIC 連線 (Wi-Fi 網路)', 'quic');
+            connections.push(qConn);
+
+            // 建立初始 QUIC 連線
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_QUIC, 'ClientHello', null, cid, false, 1.5, simId);
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_QUIC, 'ServerHello', null, cid, false, 1.5, simId);
+            setRTT(1);
+            
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_DATA, 'GET /video.mp4', null, cid, false, 1.2, simId);
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_DATA, 'Video Stream', null, cid, false, 1.2, simId);
+            
+            if (!(await sleep(400, simId))) return;
+
+            // 觸發網路切換
+            clientNetwork = '4G (10.0.0.5)';
+            qConn.label = '網路切換中... (IP 改變)';
+            qConn.alpha = 0.5; // 變暗表示不穩
+            if (!(await sleep(800, simId))) return;
+
+            // 傳統 TCP 會斷線，這裡展示 QUIC 送封包
+            qConn.label = 'QUIC 連線恢復 (利用相同 CID)';
+            qConn.alpha = 1.0;
+            
+            // 從新 IP 發送資料，帶有相同的 CID
+            await spawnPacket(getClientX(), y, getServerX(), y, COLOR_DATA, 'ACK + GET', 'New IP!', cid, false, 1.2, simId);
+            
+            // 伺服器認得 CID，直接回應，不需重新握手！
+            if (!(await sleep(50, simId))) return;
+            await spawnPacket(getServerX(), y, getClientX(), y, COLOR_DATA, 'Video Stream', 'Seamless!', cid, false, 1.2, simId);
+            setRTT(2); // 延續之前的 RTT，沒有退回 0重連
+
+            if (!(await sleep(1000, simId))) return;
+            qConn.targetAlpha = 0;
+        }
+
+        // --- UI 控制 ---
+        function setProtocol(p) {
+            currentProtocol = p;
+            currentSimId++;
+            packets = []; connections = [];
+            clientNetwork = 'Wi-Fi (192.168.1.10)';
+            setRTT(0);
+            
+            document.querySelectorAll('.protocol-btn').forEach(btn => {
+                if (btn.id === `btn-${p}`) {
+                    const theme = protocols[p].themeClass;
+                    btn.className = `protocol-btn w-full text-left px-4 py-3 rounded-lg text-white font-semibold transition-all shadow-md border ${theme} text-sm`;
+                } else {
+                    btn.className = 'protocol-btn w-full text-left px-4 py-3 rounded-lg bg-gray-700 text-gray-300 hover:bg-gray-600 transition-all border border-transparent text-sm';
+                }
+            });
+            
+            const info = protocols[p];
+            document.getElementById('desc-title').innerText = info.title;
+            document.getElementById('desc-text').innerText = info.desc;
+            
+            const btnStart = document.getElementById('btn-start');
+            btnStart.disabled = false;
+            btnStart.innerHTML = '開始演示 ▶';
+            btnStart.className = 'w-full bg-purple-600 hover:bg-purple-500 py-3 rounded-lg font-bold text-base transition-all shadow-[0_0_15px_rgba(139,92,246,0.4)] hover:shadow-[0_0_20px_rgba(139,92,246,0.6)] text-white';
+        }
+
+        async function startSimulation() {
+            currentSimId++;
+            packets = []; connections = [];
+            clientNetwork = 'Wi-Fi (192.168.1.10)';
+            setRTT(0);
+            let simId = currentSimId;
+            
+            const btnStart = document.getElementById('btn-start');
+            btnStart.disabled = true;
+            btnStart.innerHTML = '演示中... <span class="animate-pulse">⏳</span>';
+            btnStart.className = 'w-full bg-gray-600 cursor-not-allowed py-3 rounded-lg font-bold text-base transition-all text-white opacity-50';
+            
+            if (currentProtocol === 'tcp') await runTCPTLS(simId);
+            else if (currentProtocol === 'quic') await runQUIC(simId);
+            else if (currentProtocol === 'migration') await runMigration(simId);
+            
+            if (simId === currentSimId) {
+                btnStart.disabled = false;
+                btnStart.innerHTML = '重新開始 ↺';
+                btnStart.className = 'w-full bg-purple-600 hover:bg-purple-500 py-3 rounded-lg font-bold text-base transition-all shadow-[0_0_15px_rgba(139,92,246,0.4)] hover:shadow-[0_0_20px_rgba(139,92,246,0.6)] text-white';
+            }
+        }
+
+        document.querySelectorAll('.protocol-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => setProtocol(e.target.id.replace('btn-', '')));
+        });
+        document.getElementById('btn-start').addEventListener('click', startSimulation);
+
+        setProtocol('quic');
+        requestAnimationFrame(animationLoop);
+    </script>
+</body>
+</html>
