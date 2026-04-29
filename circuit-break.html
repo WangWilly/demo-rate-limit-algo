@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>熔斷器 (Circuit Breaker) 互動展示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 自定義滾動條 */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+        
+        /* 狀態卡片過渡動畫 */
+        .status-card {
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto space-y-6">
+        <!-- 標題區 -->
+        <div class="text-center space-y-2">
+            <h1 class="text-3xl md:text-4xl font-bold text-slate-900">🛡️ 熔斷器模式 (Circuit Breaker)</h1>
+            <p class="text-slate-500">動手操作左側的「客戶端」與「下游服務」，觀察右側熔斷器的狀態變化與攔截行為。</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+            
+            <!-- 左側：控制面板 (客戶端 & 下游服務) -->
+            <div class="md:col-span-5 space-y-6">
+                
+                <!-- 客戶端控制 -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                    <div class="flex items-center space-x-2 mb-4">
+                        <span class="text-2xl">📱</span>
+                        <h2 class="text-xl font-semibold">客戶端 (Client)</h2>
+                    </div>
+                    <p class="text-sm text-slate-500 mb-4">模擬使用者或上游服務發出 API 請求。</p>
+                    <button id="btn-send-request" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors flex justify-center items-center gap-2 active:scale-95">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22 11 13 2 9 22 2z"/></svg>
+                        發送請求
+                    </button>
+                </div>
+
+                <!-- 下游服務控制 -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                    <div class="flex items-center space-x-2 mb-4">
+                        <span class="text-2xl">🖥️</span>
+                        <h2 class="text-xl font-semibold">下游服務 (Downstream)</h2>
+                    </div>
+                    <p class="text-sm text-slate-500 mb-4">模擬被依賴的外部服務。您可以手動觸發故障來測試熔斷機制。</p>
+                    
+                    <div class="flex items-center justify-between p-4 rounded-lg bg-slate-50 border border-slate-200">
+                        <div>
+                            <p class="font-medium text-slate-700" id="downstream-status-text">服務運作正常</p>
+                            <p class="text-xs text-slate-500">切換開關模擬 500 錯誤或超時</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="toggle-downstream-error" class="sr-only peer">
+                            <div class="w-11 h-6 bg-green-500 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                        </label>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- 右側：熔斷器狀態 -->
+            <div class="md:col-span-7 bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex flex-col">
+                <div class="flex items-center space-x-2 mb-6">
+                    <span class="text-2xl">⚡</span>
+                    <h2 class="text-xl font-semibold">熔斷器 (Circuit Breaker)</h2>
+                </div>
+
+                <!-- 狀態顯示卡片 -->
+                <div id="cb-status-card" class="status-card bg-green-50 border border-green-200 rounded-xl p-6 text-center mb-6 relative overflow-hidden">
+                    <h3 class="text-sm font-semibold uppercase tracking-wider text-green-700 mb-1">當前狀態</h3>
+                    <div class="text-3xl font-black text-green-600 mb-2" id="cb-state-text">關閉 (CLOSED)</div>
+                    <p class="text-green-700 text-sm" id="cb-state-desc">請求正常放行中</p>
+                    
+                    <!-- 倒數計時進度條 (Open 狀態時顯示) -->
+                    <div id="cooldown-container" class="absolute bottom-0 left-0 w-full h-1.5 bg-red-200 hidden">
+                        <div id="cooldown-bar" class="h-full bg-red-600 w-full transition-all duration-100 ease-linear"></div>
+                    </div>
+                </div>
+
+                <!-- 統計數據 -->
+                <div class="grid grid-cols-3 gap-4 mb-6">
+                    <div class="bg-slate-50 p-3 rounded-lg text-center border border-slate-100">
+                        <p class="text-xs text-slate-500 mb-1">連續失敗次數</p>
+                        <p class="text-xl font-bold text-slate-700"><span id="metric-fails">0</span> / 3</p>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-lg text-center border border-slate-100">
+                        <p class="text-xs text-slate-500 mb-1">總請求數</p>
+                        <p class="text-xl font-bold text-slate-700" id="metric-total">0</p>
+                    </div>
+                    <div class="bg-slate-50 p-3 rounded-lg text-center border border-slate-100">
+                        <p class="text-xs text-slate-500 mb-1">快速失敗攔截</p>
+                        <p class="text-xl font-bold text-slate-700" id="metric-rejected">0</p>
+                    </div>
+                </div>
+
+                <div class="text-xs text-slate-400 bg-slate-50 p-3 rounded border border-slate-100">
+                    <strong>設定參數：</strong> 閾值 = 3 次連續失敗 | 冷卻時間 = 5 秒 | 半開試探 = 1 次請求
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部：執行日誌 (Console) -->
+        <div class="bg-[#1e1e1e] rounded-xl shadow-lg overflow-hidden flex flex-col h-72">
+            <div class="bg-[#2d2d2d] px-4 py-2 flex justify-between items-center border-b border-gray-700">
+                <span class="text-gray-300 text-sm font-mono flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    系統執行日誌
+                </span>
+                <button id="btn-clear-log" class="text-gray-500 hover:text-white text-xs transition-colors">清除日誌</button>
+            </div>
+            <div id="log-container" class="p-4 overflow-y-auto custom-scrollbar flex-1 font-mono text-sm space-y-1">
+                <!-- 日誌內容會動態插入這裡 -->
+                <div class="text-gray-500">系統初始化完成。等待請求中...</div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- UI 元素綁定 ---
+        const btnSend = document.getElementById('btn-send-request');
+        const toggleError = document.getElementById('toggle-downstream-error');
+        const downstreamStatusText = document.getElementById('downstream-status-text');
+        
+        const cbStatusCard = document.getElementById('cb-status-card');
+        const cbStateText = document.getElementById('cb-state-text');
+        const cbStateDesc = document.getElementById('cb-state-desc');
+        const cooldownContainer = document.getElementById('cooldown-container');
+        const cooldownBar = document.getElementById('cooldown-bar');
+        
+        const metricFails = document.getElementById('metric-fails');
+        const metricTotal = document.getElementById('metric-total');
+        const metricRejected = document.getElementById('metric-rejected');
+        
+        const logContainer = document.getElementById('log-container');
+        const btnClearLog = document.getElementById('btn-clear-log');
+
+        // --- 狀態定義 ---
+        const STATES = {
+            CLOSED: 'CLOSED',
+            OPEN: 'OPEN',
+            HALF_OPEN: 'HALF_OPEN'
+        };
+
+        // --- 熔斷器實作邏輯 ---
+        class CircuitBreaker {
+            constructor() {
+                this.state = STATES.CLOSED;
+                this.failureThreshold = 3;      // 連續失敗幾次觸發熔斷
+                this.resetTimeout = 5000;       // 冷卻時間 (毫秒)
+                
+                this.consecutiveFailures = 0;   // 當前連續失敗次數
+                this.totalRequests = 0;         // 總請求數
+                this.rejectedRequests = 0;      // 被攔截的請求數
+                
+                this.cooldownTimer = null;
+                this.cooldownEndTime = 0;
+                this.cooldownInterval = null;
+            }
+
+            // 發送請求的代理方法
+            async execute(requestFunc) {
+                this.totalRequests++;
+                updateMetricsUI();
+
+                // 1. 檢查當前狀態
+                if (this.state === STATES.OPEN) {
+                    this.rejectedRequests++;
+                    updateMetricsUI();
+                    log('[熔斷器] 狀態為 <span class="text-red-400">OPEN</span>，直接拒絕請求 (快速失敗)', 'error');
+                    return Promise.reject(new Error("Circuit Breaker is OPEN"));
+                }
+
+                if (this.state === STATES.HALF_OPEN) {
+                    log('[熔斷器] 狀態為 <span class="text-orange-400">HALF_OPEN</span>，放行試探性請求...', 'warning');
+                } else {
+                    log('[熔斷器] 狀態為 <span class="text-green-400">CLOSED</span>，轉發請求至下游...', 'info');
+                }
+
+                // 2. 執行實際請求
+                try {
+                    const result = await requestFunc();
+                    this.onSuccess();
+                    return result;
+                } catch (error) {
+                    this.onFailure(error);
+                    throw error;
+                }
+            }
+
+            // 請求成功時的處理
+            onSuccess() {
+                if (this.state === STATES.HALF_OPEN) {
+                    log('[熔斷器] 試探請求 <span class="text-green-400">成功</span>！下游服務已恢復健康。', 'success');
+                    this.transitionTo(STATES.CLOSED);
+                } else {
+                    log('[下游服務] 處理成功 (200 OK)', 'success');
+                    // 在 CLOSED 狀態下成功，將連續失敗歸零
+                    this.consecutiveFailures = 0;
+                    updateMetricsUI();
+                }
+            }
+
+            // 請求失敗時的處理
+            onFailure(error) {
+                log(`[下游服務] 處理失敗 (${error.message})`, 'error');
+
+                if (this.state === STATES.HALF_OPEN) {
+                    log('[熔斷器] 試探請求 <span class="text-red-400">失敗</span>！下游服務依然異常。', 'error');
+                    this.transitionTo(STATES.OPEN);
+                } else if (this.state === STATES.CLOSED) {
+                    this.consecutiveFailures++;
+                    updateMetricsUI();
+                    log(`[熔斷器] 連續失敗次數: ${this.consecutiveFailures}/${this.failureThreshold}`, 'warning');
+                    
+                    if (this.consecutiveFailures >= this.failureThreshold) {
+                        log('[熔斷器] 達到錯誤閾值！觸發熔斷機制。', 'error');
+                        this.transitionTo(STATES.OPEN);
+                    }
+                }
+            }
+
+            // 狀態轉換邏輯
+            transitionTo(newState) {
+                const oldState = this.state;
+                this.state = newState;
+                
+                log(`[狀態變更] ${oldState} -> <span class="font-bold text-white">${newState}</span>`, 'system');
+
+                // 離開 OPEN 狀態時，清除計時器
+                if (oldState === STATES.OPEN) {
+                    clearTimeout(this.cooldownTimer);
+                    clearInterval(this.cooldownInterval);
+                    cooldownContainer.classList.add('hidden');
+                }
+
+                if (newState === STATES.CLOSED) {
+                    this.consecutiveFailures = 0;
+                    updateMetricsUI();
+                    setUIState('closed');
+                } 
+                else if (newState === STATES.OPEN) {
+                    setUIState('open');
+                    this.startCooldown();
+                } 
+                else if (newState === STATES.HALF_OPEN) {
+                    setUIState('half_open');
+                }
+            }
+
+            // 啟動冷卻倒數
+            startCooldown() {
+                log(`[熔斷器] 啟動 ${this.resetTimeout/1000} 秒冷卻倒數...`, 'system');
+                cooldownContainer.classList.remove('hidden');
+                this.cooldownEndTime = Date.now() + this.resetTimeout;
+                
+                // 動畫更新
+                this.cooldownInterval = setInterval(() => {
+                    const remaining = this.cooldownEndTime - Date.now();
+                    if (remaining <= 0) {
+                        clearInterval(this.cooldownInterval);
+                        cooldownBar.style.width = '0%';
+                    } else {
+                        const percent = (remaining / this.resetTimeout) * 100;
+                        cooldownBar.style.width = `${percent}%`;
+                    }
+                }, 50); // 高頻更新確保進度條平滑
+
+                // 實際狀態切換計時器
+                this.cooldownTimer = setTimeout(() => {
+                    log('[熔斷器] 冷卻時間結束，準備進入半開狀態進行試探。', 'system');
+                    this.transitionTo(STATES.HALF_OPEN);
+                }, this.resetTimeout);
+            }
+        }
+
+        // 實例化熔斷器
+        const cb = new CircuitBreaker();
+
+        // --- 模擬下游服務 ---
+        let isDownstreamBroken = false;
+
+        const mockDownstreamService = () => {
+            return new Promise((resolve, reject) => {
+                // 模擬網路延遲 300ms - 600ms
+                const delay = Math.floor(Math.random() * 300) + 300;
+                
+                setTimeout(() => {
+                    if (isDownstreamBroken) {
+                        reject(new Error("500 Internal Server Error"));
+                    } else {
+                        resolve("Data from downstream");
+                    }
+                }, delay);
+            });
+        };
+
+        // --- 事件綁定 ---
+
+        // 點擊發送請求
+        btnSend.addEventListener('click', async () => {
+            log('----------------------------------', 'gray');
+            log('[客戶端] 發起請求...', 'client');
+            
+            // UI 狀態：按鈕加上 loading 感覺
+            const originalText = btnSend.innerHTML;
+            btnSend.disabled = true;
+            btnSend.classList.add('opacity-75', 'cursor-not-allowed');
+            
+            try {
+                await cb.execute(mockDownstreamService);
+                // 請求成功完成
+            } catch (err) {
+                // 請求失敗或被拒絕 (已被 cb 內部處理紀錄)
+            } finally {
+                // 恢復按鈕狀態
+                btnSend.disabled = false;
+                btnSend.classList.remove('opacity-75', 'cursor-not-allowed');
+            }
+        });
+
+        // 切換下游服務狀態
+        toggleError.addEventListener('change', (e) => {
+            isDownstreamBroken = e.target.checked;
+            if (isDownstreamBroken) {
+                downstreamStatusText.textContent = "服務已故障 (模擬)";
+                downstreamStatusText.classList.replace('text-slate-700', 'text-red-600');
+                log('[設定] 已手動將下游服務設定為: 故障', 'system');
+            } else {
+                downstreamStatusText.textContent = "服務運作正常";
+                downstreamStatusText.classList.replace('text-red-600', 'text-slate-700');
+                log('[設定] 已手動將下游服務設定為: 正常', 'system');
+            }
+        });
+
+        // 清除日誌
+        btnClearLog.addEventListener('click', () => {
+            logContainer.innerHTML = '';
+            log('日誌已清除。', 'gray');
+        });
+
+
+        // --- UI 更新工具函式 ---
+
+        function updateMetricsUI() {
+            metricFails.textContent = cb.consecutiveFailures;
+            metricTotal.textContent = cb.totalRequests;
+            metricRejected.textContent = cb.rejectedRequests;
+        }
+
+        function setUIState(stateType) {
+            // 移除所有顏色 class
+            cbStatusCard.classList.remove('bg-green-50', 'border-green-200', 'bg-red-50', 'border-red-200', 'bg-orange-50', 'border-orange-200');
+            cbStateText.classList.remove('text-green-600', 'text-red-600', 'text-orange-600');
+            cbStateDesc.classList.remove('text-green-700', 'text-red-700', 'text-orange-700');
+
+            if (stateType === 'closed') {
+                cbStatusCard.classList.add('bg-green-50', 'border-green-200');
+                cbStateText.classList.add('text-green-600');
+                cbStateText.textContent = '關閉 (CLOSED)';
+                cbStateDesc.classList.add('text-green-700');
+                cbStateDesc.textContent = '請求正常放行中';
+            } else if (stateType === 'open') {
+                cbStatusCard.classList.add('bg-red-50', 'border-red-200');
+                cbStateText.classList.add('text-red-600');
+                cbStateText.textContent = '打開 (OPEN)';
+                cbStateDesc.classList.add('text-red-700');
+                cbStateDesc.textContent = '系統保護中，直接拒絕請求';
+            } else if (stateType === 'half_open') {
+                cbStatusCard.classList.add('bg-orange-50', 'border-orange-200');
+                cbStateText.classList.add('text-orange-600');
+                cbStateText.textContent = '半開 (HALF-OPEN)';
+                cbStateDesc.classList.add('text-orange-700');
+                cbStateDesc.textContent = '冷卻結束，允許一次試探性請求';
+            }
+        }
+
+        function log(message, type = 'info') {
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: "numeric", minute: "numeric", second: "numeric", fractionalSecondDigits: 3 });
+            const div = document.createElement('div');
+            
+            let colorClass = 'text-gray-300';
+            if (type === 'error') colorClass = 'text-red-400';
+            else if (type === 'success') colorClass = 'text-green-400';
+            else if (type === 'warning') colorClass = 'text-yellow-400';
+            else if (type === 'client') colorClass = 'text-blue-300';
+            else if (type === 'system') colorClass = 'text-purple-300';
+            else if (type === 'gray') colorClass = 'text-gray-500';
+
+            div.innerHTML = `<span class="text-gray-600">[${time}]</span> <span class="${colorClass}">${message}</span>`;
+            logContainer.appendChild(div);
+            
+            // 自動滾動到底部
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+    </script>
+</body>
+</html>
