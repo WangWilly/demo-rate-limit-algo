@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 狀態管理與架構展示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0f172a; /* 深色背景 */
+            color: #e2e8f0;
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(71, 85, 105, 0.5);
+        }
+        
+        /* 切換按鈕樣式 */
+        .toggle-btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+        .toggle-btn.active {
+            background-color: #3b82f6;
+            color: white;
+            border-color: #60a5fa;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+        }
+        .toggle-btn.inactive {
+            background-color: rgba(30, 41, 59, 0.8);
+            color: #94a3b8;
+        }
+        .toggle-btn.inactive:hover {
+            background-color: rgba(51, 65, 85, 0.8);
+            color: #f1f5f9;
+        }
+
+        /* 動作按鈕樣式 */
+        .action-btn {
+            width: 100%;
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-primary {
+            background-color: #2563eb;
+            color: white;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background-color: #1d4ed8;
+        }
+        .btn-danger {
+            background-color: rgba(153, 27, 27, 0.3);
+            color: #fca5a5;
+            border: 1px solid rgba(153, 27, 27, 0.5);
+        }
+        .btn-danger:hover:not(:disabled) {
+            background-color: rgba(153, 27, 27, 0.5);
+        }
+        .btn-success {
+            background-color: #059669;
+            color: white;
+        }
+
+        /* 滾動條樣式 */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.5);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+        
+        .toast-enter {
+            animation: slideIn 0.3s ease-out forwards;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 頂部標題列 -->
+    <header class="glass-panel p-4 flex justify-between items-center shrink-0 border-b border-slate-700 z-20">
+        <div class="flex items-center gap-3">
+            <div class="bg-indigo-500/20 p-2 rounded-lg text-indigo-400">
+                <i data-lucide="network" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-white">WebSocket 架構模擬器</h1>
+                <p class="text-xs text-slate-400">展示狀態管理與跨伺服器通訊</p>
+            </div>
+        </div>
+
+        <div class="flex gap-4 items-center">
+            <div class="text-xs text-slate-400 font-medium tracking-wide">選擇架構模式：</div>
+            <div class="flex bg-slate-900/50 p-1 rounded-xl border border-slate-700/50">
+                <button id="mode-sticky" class="toggle-btn active flex items-center gap-2">
+                    <i data-lucide="magnet" class="w-4 h-4"></i> Sticky Session (黏滯會話)
+                </button>
+                <button id="mode-pubsub" class="toggle-btn inactive flex items-center gap-2">
+                    <i data-lucide="radio" class="w-4 h-4"></i> Pub/Sub (無狀態架構)
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要內容區：改為左右 Flex 切割 -->
+    <main class="flex-1 flex overflow-hidden relative">
+        
+        <!-- 左側控制面板 (固定寬度，獨立捲動) -->
+        <div class="w-80 lg:w-96 flex flex-col gap-5 p-5 bg-slate-900/80 border-r border-slate-700 z-20 shrink-0 overflow-y-auto backdrop-blur-md">
+            
+            <!-- 資訊卡片 -->
+            <div class="glass-panel rounded-xl shadow-lg p-5 shrink-0">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2 mb-2" id="info-title">
+                    <span class="bg-indigo-500 text-white text-xs px-2 py-0.5 rounded font-bold">模式 1</span> 黏滯會話
+                </h2>
+                <p class="text-sm text-slate-300 leading-relaxed min-h-[60px]" id="info-desc">
+                    利用 Load Balancer 的 Cookie 將使用者的連線固定在特定伺服器。若該伺服器當機，使用者狀態將會遺失。
+                </p>
+            </div>
+
+            <!-- 動作卡片 -->
+            <div class="glass-panel rounded-xl shadow-lg p-5 shrink-0">
+                <h3 class="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2 uppercase tracking-wide">
+                    <i data-lucide="mouse-pointer-click" class="w-4 h-4"></i> 互動控制
+                </h3>
+                
+                <div class="space-y-3">
+                    <button id="btn-add-client" class="action-btn btn-primary group">
+                        <span>新增 Client 連線</span>
+                        <i data-lucide="user-plus" class="w-4 h-4 group-hover:scale-110 transition-transform"></i>
+                    </button>
+                    
+                    <button id="btn-send-msg" disabled class="action-btn bg-slate-700 text-slate-400 group">
+                        <span>Client 傳送訊息</span>
+                        <i data-lucide="send" class="w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
+                    </button>
+
+                    <button id="btn-kill-server" class="action-btn btn-danger group mt-6 border-t border-slate-700 pt-3">
+                        <span>模擬 Server A 故障</span>
+                        <i data-lucide="alert-triangle" class="w-4 h-4 group-hover:animate-pulse"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 日誌卡片 -->
+            <div class="glass-panel rounded-xl shadow-lg p-4 flex-1 flex flex-col min-h-[200px]">
+                <div class="text-xs font-semibold text-slate-500 mb-2 flex justify-between items-center shrink-0">
+                    <span>系統日誌</span>
+                    <button id="btn-clear-log" class="hover:text-slate-300"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                </div>
+                <div id="log-container" class="text-xs font-mono space-y-1.5 overflow-y-auto flex-1 pr-2">
+                    <!-- Logs go here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 右側 Canvas 區 -->
+        <div class="flex-1 relative bg-slate-900" id="canvas-container">
+            <canvas id="app-canvas"></canvas>
+            
+            <!-- 右下角狀態提示 -->
+            <div id="toast-container" class="absolute bottom-6 right-6 flex flex-col gap-2 z-20 pointer-events-none">
+                <!-- Toasts -->
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // 初始化 Icons
+        lucide.createIcons();
+
+        // --- 核心系統常數與狀態 ---
+        const MODE_STICKY = 'STICKY';
+        const MODE_PUBSUB = 'PUBSUB';
+        let currentMode = MODE_STICKY;
+
+        const SERVER_A_ID = 'S-A';
+        const SERVER_B_ID = 'S-B';
+        
+        // --- 實體定義 ---
+        let servers = {
+            [SERVER_A_ID]: { id: SERVER_A_ID, name: 'Server A', isAlive: true, color: '#10b981', clients: [] }, // Emerald
+            [SERVER_B_ID]: { id: SERVER_B_ID, name: 'Server B', isAlive: true, color: '#f59e0b', clients: [] }  // Amber
+        };
+
+        let clients = [];
+        let nextClientId = 1;
+        let flyingObjects = [];
+        let particles = [];
+
+        // --- UI 元素綁定 ---
+        const btnSticky = document.getElementById('mode-sticky');
+        const btnPubSub = document.getElementById('mode-pubsub');
+        const infoTitle = document.getElementById('info-title');
+        const infoDesc = document.getElementById('info-desc');
+        
+        const btnAddClient = document.getElementById('btn-add-client');
+        const btnSendMsg = document.getElementById('btn-send-msg');
+        const btnKillServer = document.getElementById('btn-kill-server');
+        
+        const logContainer = document.getElementById('log-container');
+        const btnClearLog = document.getElementById('btn-clear-log');
+        const toastContainer = document.getElementById('toast-container');
+
+        // --- Canvas 相關 ---
+        const canvas = document.getElementById('app-canvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        let cw, ch;
+        let positions = {};
+
+        function resizeCanvas() {
+            // 只取得右側容器的大小，不包含左側面板
+            cw = container.clientWidth;
+            ch = container.clientHeight;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = cw * dpr;
+            canvas.height = ch * dpr;
+            ctx.scale(dpr, dpr);
+            
+            updatePositions();
+            // 讓現有的 Clients 重新排列適應新大小
+            repositionClients();
+            if (particles.length === 0) initParticles();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function updatePositions() {
+            // 在右側區域重新定位設備
+            const rightEdge = cw * 0.8;
+            const centerX = cw * 0.45;
+            
+            positions = {
+                lb: { x: centerX, y: ch * 0.5, radius: 40, label: 'Load Balancer\n(Nginx/ALB)' },
+                redis: { x: rightEdge, y: ch * 0.15, radius: 35, label: 'Redis\n(Pub/Sub)' },
+                serverA: { x: rightEdge, y: ch * 0.45, radius: 45, label: 'Server A' },
+                serverB: { x: rightEdge, y: ch * 0.8, radius: 45, label: 'Server B' }
+            };
+        }
+
+        function repositionClients() {
+            clients.forEach((c, i) => {
+                c.x = cw * 0.15 + (Math.sin(i) * 20); // 錯開一點 X 軸
+                c.y = ch * 0.2 + (i * 70) % (ch * 0.6);
+            });
+        }
+
+        function initParticles() {
+            particles = [];
+            for(let i=0; i<40; i++) {
+                particles.push({
+                    x: Math.random() * cw,
+                    y: Math.random() * ch,
+                    size: Math.random() * 2 + 0.5,
+                    vx: (Math.random() - 0.5) * 0.3,
+                    vy: (Math.random() - 0.5) * 0.3,
+                    alpha: Math.random() * 0.5 + 0.1
+                });
+            }
+        }
+
+        // --- 輔助函數 ---
+        function addLog(msg, type = 'info') {
+            const div = document.createElement('div');
+            let color = 'text-slate-400';
+            if (type === 'success') color = 'text-emerald-400';
+            if (type === 'error') color = 'text-rose-400';
+            if (type === 'warn') color = 'text-amber-400';
+            if (type === 'system') color = 'text-blue-400';
+            
+            const time = new Date().toLocaleTimeString('zh-TW', {hour12: false});
+            div.className = `${color} py-0.5 border-b border-slate-800/50 last:border-0`;
+            div.innerHTML = `<span class="opacity-50 mr-1">[${time}]</span> ${msg}`;
+            
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function showToast(title, message, type = 'info') {
+            const toast = document.createElement('div');
+            let borderCol = 'border-blue-500';
+            let icon = 'info';
+            
+            if(type === 'error') { borderCol = 'border-rose-500'; icon = 'alert-circle'; }
+            if(type === 'success') { borderCol = 'border-emerald-500'; icon = 'check-circle'; }
+            if(type === 'warn') { borderCol = 'border-amber-500'; icon = 'alert-triangle'; }
+
+            toast.className = `glass-panel border-l-4 ${borderCol} p-3 rounded shadow-lg toast-enter min-w-[250px] pointer-events-auto`;
+            toast.innerHTML = `
+                <div class="flex items-start gap-3">
+                    <i data-lucide="${icon}" class="w-5 h-5 mt-0.5 ${borderCol.replace('border-', 'text-')}"></i>
+                    <div>
+                        <h4 class="text-sm font-bold text-white">${title}</h4>
+                        <p class="text-xs text-slate-300 mt-1">${message}</p>
+                    </div>
+                </div>
+            `;
+            toastContainer.appendChild(toast);
+            lucide.createIcons();
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(100%)';
+                toast.style.transition = 'all 0.3s ease-in';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        function updateBtnState() {
+            const hasAliveClient = clients.some(c => c.state === 'CONNECTED');
+            btnSendMsg.disabled = !hasAliveClient;
+            if (hasAliveClient) {
+                btnSendMsg.classList.replace('bg-slate-700', 'bg-indigo-600');
+                btnSendMsg.classList.replace('text-slate-400', 'text-white');
+            } else {
+                btnSendMsg.classList.replace('bg-indigo-600', 'bg-slate-700');
+                btnSendMsg.classList.replace('text-white', 'text-slate-400');
+            }
+        }
+
+        function spawnAnimObject(type, fromPos, toPos, data, onComplete) {
+            flyingObjects.push({
+                type: type, // 'conn_req', 'msg_up', 'msg_down', 'pub', 'sub'
+                x: fromPos.x, y: fromPos.y,
+                targetX: toPos.x, targetY: toPos.y,
+                progress: 0,
+                speed: 0.02,
+                data: data,
+                onComplete: onComplete
+            });
+        }
+
+        // --- 核心業務邏輯 ---
+
+        // 1. 切換模式
+        function switchMode(newMode) {
+            currentMode = newMode;
+            
+            // 重置系統
+            clients = [];
+            flyingObjects = [];
+            servers[SERVER_A_ID].isAlive = true;
+            servers[SERVER_B_ID].isAlive = true;
+            servers[SERVER_A_ID].clients = [];
+            servers[SERVER_B_ID].clients = [];
+            btnKillServer.disabled = false;
+            btnKillServer.querySelector('span').textContent = '模擬 Server A 故障';
+            
+            logContainer.innerHTML = '';
+            
+            if (newMode === MODE_STICKY) {
+                btnSticky.className = 'toggle-btn active flex items-center gap-2';
+                btnPubSub.className = 'toggle-btn inactive flex items-center gap-2';
+                infoTitle.innerHTML = '<span class="bg-indigo-500 text-white text-xs px-2 py-0.5 rounded font-bold">架構 1</span> 黏滯會話 (Sticky Session)';
+                infoDesc.innerHTML = 'Client 透過 LB 的 Cookie 被綁定在特定的 Server。此架構下，跨伺服器無法通訊。若 Server 故障，連線會中斷並重新分配。';
+                addLog('系統切換至：Sticky Session 模式', 'system');
+            } else {
+                btnPubSub.className = 'toggle-btn active flex items-center gap-2';
+                btnSticky.className = 'toggle-btn inactive flex items-center gap-2';
+                infoTitle.innerHTML = '<span class="bg-emerald-500 text-white text-xs px-2 py-0.5 rounded font-bold">架構 2</span> 無狀態 (Redis Pub/Sub)';
+                infoDesc.innerHTML = '連線可由 LB 隨機分配。所有 Server 皆連接 Redis。當 Client 發送訊息，Server 會發佈(Pub)到 Redis，其他 Server 收到後(Sub)廣播給其 Client。';
+                addLog('系統切換至：Redis Pub/Sub 模式', 'system');
+            }
+            updateBtnState();
+            lucide.createIcons();
+        }
+
+        // 2. 新增 Client 連線
+        function addClient() {
+            const id = `C${nextClientId++}`;
+            
+            // 計算 Client 的初始位置 (相對右側容器)
+            const cx = cw * 0.15 + (Math.sin(clients.length) * 20); 
+            const cy = ch * 0.2 + (clients.length * 70) % (ch * 0.6);
+
+            const client = {
+                id: id,
+                x: cx,
+                y: cy,
+                state: 'CONNECTING',
+                connectedServer: null,
+                cookie: null
+            };
+            
+            clients.push(client);
+            addLog(`[${id}] 發起連線請求...`, 'info');
+
+            // 動畫：Client -> LB
+            spawnAnimObject('conn_req', client, positions.lb, { client: client }, (obj) => {
+                const c = obj.data.client;
+                
+                let targetServerId;
+                const availableServers = Object.values(servers).filter(s => s.isAlive);
+                
+                if (availableServers.length === 0) {
+                    addLog(`[${c.id}] 錯誤：沒有可用的伺服器`, 'error');
+                    c.state = 'DISCONNECTED';
+                    return;
+                }
+
+                if (currentMode === MODE_STICKY) {
+                    if (c.cookie && servers[c.cookie] && servers[c.cookie].isAlive) {
+                        targetServerId = c.cookie;
+                        addLog(`[LB] 讀取 Cookie，導向 ${targetServerId}`, 'system');
+                    } else {
+                        targetServerId = availableServers[Math.floor(Math.random() * availableServers.length)].id;
+                        c.cookie = targetServerId; 
+                        addLog(`[LB] 分配新 Cookie -> ${targetServerId}`, 'system');
+                    }
+                } else {
+                    targetServerId = availableServers[Math.floor(Math.random() * availableServers.length)].id;
+                    addLog(`[LB] 隨機分配連線 -> ${targetServerId}`, 'system');
+                }
+
+                // 動畫：LB -> Server
+                spawnAnimObject('conn_req', positions.lb, positions[targetServerId === SERVER_A_ID ? 'serverA' : 'serverB'], { client: c, serverId: targetServerId }, (obj2) => {
+                    const c2 = obj2.data.client;
+                    const sid = obj2.data.serverId;
+                    
+                    if(!servers[sid].isAlive) return;
+
+                    c2.state = 'CONNECTED';
+                    c2.connectedServer = sid;
+                    servers[sid].clients.push(c2);
+                    
+                    addLog(`[${c2.id}] 已連線至 ${servers[sid].name}`, 'success');
+                    updateBtnState();
+                });
+            });
+            updateBtnState();
+        }
+
+        // 3. 發送訊息測試
+        function simulateMessageBroadcast() {
+            const activeClients = clients.filter(c => c.state === 'CONNECTED');
+            if (activeClients.length === 0) return;
+            
+            const sender = activeClients[Math.floor(Math.random() * activeClients.length)];
+            const srvId = sender.connectedServer;
+            const srvPosName = srvId === SERVER_A_ID ? 'serverA' : 'serverB';
+            
+            addLog(`[${sender.id}] 傳送聊天訊息...`, 'info');
+
+            // 1. Client -> LB
+            spawnAnimObject('msg_up', sender, positions.lb, { sender: sender }, (obj) => {
+                // 2. LB -> Server
+                spawnAnimObject('msg_up', positions.lb, positions[srvPosName], { sender: sender }, (obj2) => {
+                    const s = obj2.data.sender;
+                    const sid = s.connectedServer;
+                    
+                    if(!servers[sid].isAlive) {
+                        addLog(`伺服器無回應，訊息遺失`, 'error');
+                        return;
+                    }
+
+                    addLog(`[${servers[sid].name}] 收到來自 ${s.id} 的訊息`, 'system');
+
+                    // 3. 處理廣播邏輯
+                    if (currentMode === MODE_STICKY) {
+                        showToast("區域廣播 (Sticky)", `訊息僅能傳遞給同在 ${servers[sid].name} 的使用者。跨伺服器使用者收不到。`, 'warn');
+                        
+                        servers[sid].clients.forEach(receiver => {
+                            if (receiver.id !== s.id) {
+                                spawnAnimObject('msg_down', positions[srvPosName], positions.lb, { receiver: receiver }, (o3) => {
+                                    spawnAnimObject('msg_down', positions.lb, o3.data.receiver, {}, () => {});
+                                });
+                            }
+                        });
+                        
+                        const missedCount = clients.filter(c => c.state === 'CONNECTED' && c.connectedServer !== sid).length;
+                        if(missedCount > 0) {
+                            addLog(`有 ${missedCount} 個連接到另一台伺服器的 Client 無法收到訊息！`, 'error');
+                        }
+
+                    } else if (currentMode === MODE_PUBSUB) {
+                        addLog(`[${servers[sid].name}] 發佈 (Pub) 訊息至 Redis`, 'system');
+                        
+                        spawnAnimObject('pub', positions[srvPosName], positions.redis, { sender: s, fromSrv: sid }, (o3) => {
+                            showToast("全域廣播 (Pub/Sub)", "透過 Redis 交換，訊息成功推送給所有伺服器上的使用者。", "success");
+                            
+                            Object.values(servers).forEach(server => {
+                                if (server.isAlive) {
+                                    const spName = server.id === SERVER_A_ID ? 'serverA' : 'serverB';
+                                    spawnAnimObject('sub', positions.redis, positions[spName], { targetServer: server }, (o4) => {
+                                        const tsrv = o4.data.targetServer;
+                                        addLog(`[${tsrv.name}] 透過 Redis 訂閱(Sub)收到訊息，準備派發`, 'system');
+                                        
+                                        tsrv.clients.forEach(receiver => {
+                                            if (receiver.id !== s.id) {
+                                                spawnAnimObject('msg_down', positions[spName], positions.lb, { receiver: receiver }, (o5) => {
+                                                    spawnAnimObject('msg_down', positions.lb, o5.data.receiver, {}, () => {});
+                                                });
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                        });
+                    }
+                });
+            });
+        }
+
+        // 4. 模擬伺服器故障
+        function killServerA() {
+            if (!servers[SERVER_A_ID].isAlive) return;
+
+            servers[SERVER_A_ID].isAlive = false;
+            const affectedClients = [...servers[SERVER_A_ID].clients];
+            servers[SERVER_A_ID].clients = [];
+            
+            btnKillServer.disabled = true;
+            btnKillServer.querySelector('span').textContent = 'Server A 已停機';
+            
+            addLog(`!!! 警告 !!! Server A 發生故障停機！`, 'error');
+            showToast("伺服器故障", "Server A 已離線，其上的連線將被中斷。", "error");
+
+            affectedClients.forEach(c => {
+                c.state = 'DISCONNECTED';
+                c.connectedServer = null;
+                addLog(`[${c.id}] 發現連線中斷，準備重連...`, 'warn');
+                
+                setTimeout(() => {
+                    if (c.state === 'DISCONNECTED') {
+                        addLog(`[${c.id}] 執行自動重連...`, 'info');
+                        spawnAnimObject('conn_req', c, positions.lb, { client: c }, (obj) => {
+                            const c2 = obj.data.client;
+                            let targetServerId = SERVER_B_ID;
+                            
+                            if (currentMode === MODE_STICKY) {
+                                addLog(`[LB] ${c2.id} 的 Cookie 指向 Server A，但 Server A 已死。分配新 Cookie -> ${targetServerId}`, 'warn');
+                                c2.cookie = targetServerId;
+                            } else {
+                                addLog(`[LB] 將 ${c2.id} 路由至健康的 ${targetServerId}`, 'system');
+                            }
+
+                            spawnAnimObject('conn_req', positions.lb, positions.serverB, { client: c2, serverId: targetServerId }, (obj2) => {
+                                const c3 = obj2.data.client;
+                                c3.state = 'CONNECTED';
+                                c3.connectedServer = SERVER_B_ID;
+                                servers[SERVER_B_ID].clients.push(c3);
+                                addLog(`[${c3.id}] 成功重連至 Server B`, 'success');
+                                updateBtnState();
+                            });
+                        });
+                    }
+                }, 1500 + Math.random() * 1000);
+            });
+            updateBtnState();
+        }
+
+        // --- 事件綁定 ---
+        btnSticky.addEventListener('click', () => { if(currentMode !== MODE_STICKY) switchMode(MODE_STICKY); });
+        btnPubSub.addEventListener('click', () => { if(currentMode !== MODE_PUBSUB) switchMode(MODE_PUBSUB); });
+        btnAddClient.addEventListener('click', addClient);
+        btnSendMsg.addEventListener('click', simulateMessageBroadcast);
+        btnKillServer.addEventListener('click', killServerA);
+        btnClearLog.addEventListener('click', () => { logContainer.innerHTML = ''; });
+
+        // --- Canvas 繪圖渲染 ---
+        function easeOutQuad(t) { return t * (2 - t); }
+
+        function drawShape(x, y, radius, color, label, iconChar, isAlive = true, isDashed = false) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            if (!isAlive) {
+                ctx.globalAlpha = 0.3;
+                color = '#ef4444';
+            }
+
+            if (isAlive) {
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 10;
+                ctx.shadowOffsetY = 5;
+            }
+
+            ctx.beginPath();
+            if (isDashed) {
+                ctx.setLineDash([5, 5]);
+            }
+            ctx.arc(0, 0, radius, 0, Math.PI * 2);
+            ctx.fillStyle = '#1e293b';
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.shadowColor = 'transparent';
+
+            ctx.fillStyle = color;
+            ctx.font = `${radius * 0.8}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(iconChar, 0, 0);
+
+            ctx.fillStyle = '#cbd5e1';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.textAlign = 'center';
+            const lines = label.split('\n');
+            lines.forEach((line, i) => {
+                ctx.fillText(line, 0, radius + 15 + (i * 14));
+            });
+
+            if (!isAlive) {
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(-radius*0.8, -radius*0.8);
+                ctx.lineTo(radius*0.8, radius*0.8);
+                ctx.moveTo(radius*0.8, -radius*0.8);
+                ctx.lineTo(-radius*0.8, radius*0.8);
+                ctx.stroke();
+            }
+
+            ctx.restore();
+            ctx.globalAlpha = 1;
+        }
+
+        function drawConnectionLine(x1, y1, x2, y2, color, active = false) {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.quadraticCurveTo(x1, (y1+y2)/2, x2, y2);
+            
+            ctx.strokeStyle = color;
+            ctx.lineWidth = active ? 2 : 1;
+            
+            if (active) {
+                ctx.shadowColor = color;
+                ctx.shadowBlur = 5;
+            } else {
+                ctx.setLineDash([4, 4]);
+            }
+            
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.shadowColor = 'transparent';
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, cw, ch);
+
+            // 1. 背景粒子
+            ctx.fillStyle = '#cbd5e1';
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                if(p.x < 0) p.x = cw; if(p.x > cw) p.x = 0;
+                if(p.y < 0) p.y = ch; if(p.y > ch) p.y = 0;
+                
+                ctx.globalAlpha = p.alpha;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+
+            // 2. 繪製線路
+            clients.forEach(c => {
+                if (c.state === 'CONNECTED') {
+                    drawConnectionLine(c.x, c.y, positions.lb.x, positions.lb.y, '#3b82f6', true);
+                    const srvPos = c.connectedServer === SERVER_A_ID ? positions.serverA : positions.serverB;
+                    const srvColor = c.connectedServer === SERVER_A_ID ? servers[SERVER_A_ID].color : servers[SERVER_B_ID].color;
+                    
+                    if (servers[c.connectedServer].isAlive) {
+                         drawConnectionLine(positions.lb.x, positions.lb.y, srvPos.x, srvPos.y, srvColor, true);
+                    }
+                }
+            });
+
+            if (currentMode === MODE_PUBSUB) {
+                if(servers[SERVER_A_ID].isAlive) drawConnectionLine(positions.serverA.x, positions.serverA.y, positions.redis.x, positions.redis.y, '#ef4444', false);
+                if(servers[SERVER_B_ID].isAlive) drawConnectionLine(positions.serverB.x, positions.serverB.y, positions.redis.x, positions.redis.y, '#ef4444', false);
+            }
+
+            // 3. 繪製節點
+            if (currentMode === MODE_PUBSUB) {
+                drawShape(positions.redis.x, positions.redis.y, positions.redis.radius, '#ef4444', positions.redis.label, '📦', true, true);
+            }
+
+            drawShape(positions.serverA.x, positions.serverA.y, positions.serverA.radius, servers[SERVER_A_ID].color, 
+                `${positions.serverA.label}\n(${servers[SERVER_A_ID].clients.length} clients)`, '🖥️', servers[SERVER_A_ID].isAlive);
+            
+            drawShape(positions.serverB.x, positions.serverB.y, positions.serverB.radius, servers[SERVER_B_ID].color, 
+                `${positions.serverB.label}\n(${servers[SERVER_B_ID].clients.length} clients)`, '🖥️', servers[SERVER_B_ID].isAlive);
+
+            drawShape(positions.lb.x, positions.lb.y, positions.lb.radius, '#3b82f6', positions.lb.label, '⚖️');
+
+            clients.forEach(c => {
+                ctx.save();
+                ctx.translate(c.x, c.y);
+                
+                let cColor = '#64748b';
+                if (c.state === 'CONNECTING') cColor = '#eab308';
+                if (c.state === 'CONNECTED') {
+                     cColor = c.connectedServer === SERVER_A_ID ? servers[SERVER_A_ID].color : servers[SERVER_B_ID].color;
+                }
+
+                ctx.beginPath();
+                ctx.arc(0, 0, 15, 0, Math.PI*2);
+                ctx.fillStyle = cColor;
+                ctx.fill();
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(c.id, 0, 0);
+
+                if (currentMode === MODE_STICKY && c.cookie) {
+                    ctx.fillStyle = c.cookie === SERVER_A_ID ? servers[SERVER_A_ID].color : servers[SERVER_B_ID].color;
+                    ctx.beginPath();
+                    ctx.arc(12, -12, 5, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.strokeStyle = '#0f172a';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                }
+
+                ctx.restore();
+            });
+
+            // 4. 繪製動畫封包
+            for (let i = flyingObjects.length - 1; i >= 0; i--) {
+                let obj = flyingObjects[i];
+                obj.progress += obj.speed;
+
+                if (obj.progress >= 1) {
+                    obj.onComplete(obj);
+                    flyingObjects.splice(i, 1);
+                    continue;
+                }
+
+                const t = easeOutQuad(obj.progress);
+                const curX = obj.x + (obj.targetX - obj.x) * t;
+                const curY = obj.y + (obj.targetY - obj.y) * t;
+
+                ctx.save();
+                ctx.translate(curX, curY);
+
+                let pColor = '#ffffff';
+                let pSize = 6;
+                
+                if (obj.type === 'conn_req') pColor = '#eab308';
+                if (obj.type === 'msg_up') { pColor = '#3b82f6'; pSize = 8; }
+                if (obj.type === 'msg_down') { pColor = '#10b981'; pSize = 8; }
+                if (obj.type === 'pub') { pColor = '#ef4444'; pSize = 10; }
+                if (obj.type === 'sub') { pColor = '#f97316'; pSize = 10; }
+
+                ctx.shadowColor = pColor;
+                ctx.shadowBlur = 10;
+                ctx.beginPath();
+                ctx.arc(0, 0, pSize, 0, Math.PI*2);
+                ctx.fillStyle = pColor;
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                const tailX = obj.x + (obj.targetX - obj.x) * Math.max(0, t - 0.1);
+                const tailY = obj.y + (obj.targetY - obj.y) * Math.max(0, t - 0.1);
+                ctx.lineTo(tailX - curX, tailY - curY);
+                ctx.strokeStyle = pColor + '80';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.restore();
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        // --- 啟動 ---
+        
+        // 延遲一點點確保 DOM 已經正確計算好 Flex 高度再抓取 Canvas size
+        setTimeout(() => {
+            resizeCanvas();
+            switchMode(MODE_STICKY);
+            addLog('系統就緒。請先點擊「新增 Client 連線」。', 'system');
+            render();
+        }, 100);
+
+    </script>
+</body>
+</html>
