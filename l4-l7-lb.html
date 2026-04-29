@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Layer 4 / Layer 7 負載平衡展示</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            overflow: hidden; /* 防止滾動，保持全螢幕應用程式感 */
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* 自訂控制項樣式 */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+        }
+        .toggle-btn {
+            transition: all 0.2s ease-in-out;
+        }
+        .toggle-btn.active {
+            background-color: #4f46e5;
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
+        }
+        .toggle-btn.inactive {
+            background-color: #f1f5f9;
+            color: #64748b;
+        }
+        .toggle-btn.inactive:hover {
+            background-color: #e2e8f0;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- 頂部控制列 -->
+    <header class="glass-panel shadow-sm p-4 flex justify-between items-center z-10 shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+                <i data-lucide="git-merge" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-slate-800">負載平衡機制展示 (Load Balancing)</h1>
+                <p class="text-xs text-slate-500" id="header-desc">選擇 L4 或 L7 模式觀察流量分發差異</p>
+            </div>
+        </div>
+
+        <!-- 模式切換開關 -->
+        <div class="flex bg-slate-100 p-1 rounded-xl shadow-inner">
+            <button id="mode-l4" class="toggle-btn active px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2">
+                <i data-lucide="zap" class="w-4 h-4"></i> Layer 4 (傳輸層)
+            </button>
+            <button id="mode-l7" class="toggle-btn inactive px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2">
+                <i data-lucide="eye" class="w-4 h-4"></i> Layer 7 (應用層)
+            </button>
+        </div>
+    </header>
+
+    <!-- 主要視覺區與側邊資訊欄 -->
+    <main class="flex-1 flex relative overflow-hidden">
+        
+        <!-- 左側資訊面板 (絕對定位覆蓋在 Canvas 上) -->
+        <div class="absolute left-6 top-6 w-80 glass-panel rounded-2xl shadow-lg p-5 z-10 flex flex-col gap-4">
+            <div>
+                <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2 mb-1" id="panel-title">
+                    <span class="bg-indigo-500 text-white text-xs px-2 py-0.5 rounded">L4</span> 傳輸層負載平衡
+                </h2>
+                <p class="text-sm text-slate-600 leading-relaxed" id="panel-desc">
+                    基於 IP 位址與 TCP/UDP Port 進行轉發。速度極快，但不了解 HTTP 內容。
+                </p>
+            </div>
+
+            <div class="border-t border-slate-200 pt-4">
+                <h3 class="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                    <i data-lucide="play-circle" class="w-4 h-4"></i> 產生測試流量
+                </h3>
+                
+                <!-- 流量產生按鈕 -->
+                <div class="space-y-2">
+                    <button id="btn-traffic-img" class="w-full text-left px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-sm font-medium transition border border-blue-200 flex justify-between items-center group">
+                        <span>請求圖片 ( /images/*.jpg )</span>
+                        <i data-lucide="image" class="w-4 h-4 opacity-50 group-hover:opacity-100"></i>
+                    </button>
+                    <button id="btn-traffic-api" class="w-full text-left px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium transition border border-emerald-200 flex justify-between items-center group">
+                        <span>請求 API 資料 ( /api/data )</span>
+                        <i data-lucide="database" class="w-4 h-4 opacity-50 group-hover:opacity-100"></i>
+                    </button>
+                    <button id="btn-traffic-video" class="w-full text-left px-4 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg text-sm font-medium transition border border-purple-200 flex justify-between items-center group">
+                        <span>請求影音串流 ( /video/stream )</span>
+                        <i data-lucide="video" class="w-4 h-4 opacity-50 group-hover:opacity-100"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 狀態說明框 -->
+            <div class="mt-2 bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <div class="text-xs font-semibold text-slate-500 mb-1 uppercase tracking-wider">Load Balancer 行為</div>
+                <div id="lb-behavior-text" class="text-sm text-slate-700 font-medium">
+                    (等待流量輸入...)
+                </div>
+            </div>
+        </div>
+
+        <!-- 伺服器狀態面板 (右側) -->
+        <div class="absolute right-6 top-6 w-64 glass-panel rounded-2xl shadow-lg p-5 z-10 flex flex-col gap-4">
+            <h3 class="text-sm font-bold text-slate-800 flex items-center gap-2 border-b pb-2">
+                <i data-lucide="server" class="w-4 h-4 text-slate-500"></i> 後端伺服器群 (Backend)
+            </h3>
+            
+            <div class="space-y-3" id="server-stats">
+                <!-- 由 JS 動態更新 -->
+            </div>
+        </div>
+
+        <!-- Canvas 動畫區 -->
+        <div class="flex-1 w-full h-full bg-[#f8fafc]" id="canvas-container">
+            <canvas id="lb-canvas"></canvas>
+        </div>
+    </main>
+
+    <script>
+        // 初始化 Icons
+        lucide.createIcons();
+
+        // --- 核心狀態定義 ---
+        const MODE_L4 = 'L4';
+        const MODE_L7 = 'L7';
+        
+        let currentMode = MODE_L4;
+        let packets = [];
+        let canvasWidth, canvasHeight;
+        let animationId;
+
+        // 定義伺服器節點
+        const servers = [
+            { id: 'S1', type: 'image', color: '#3b82f6', label: '圖片伺服器', load: 0, x: 0, y: 0 },   // Blue
+            { id: 'S2', type: 'api', color: '#10b981', label: 'API 伺服器', load: 0, x: 0, y: 0 },    // Emerald
+            { id: 'S3', type: 'video', color: '#a855f7', label: '影音伺服器', load: 0, x: 0, y: 0 }  // Purple
+        ];
+
+        // L4 的 Round Robin 狀態
+        let l4RoundRobinIndex = 0;
+
+        // --- UI 元素參考 ---
+        const btnL4 = document.getElementById('mode-l4');
+        const btnL7 = document.getElementById('mode-l7');
+        const panelTitle = document.getElementById('panel-title');
+        const panelDesc = document.getElementById('panel-desc');
+        const lbBehaviorText = document.getElementById('lb-behavior-text');
+        const serverStatsContainer = document.getElementById('server-stats');
+        
+        const canvas = document.getElementById('lb-canvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+
+        // --- 初始化與調整大小 ---
+        function resizeCanvas() {
+            canvasWidth = container.clientWidth;
+            canvasHeight = container.clientHeight;
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = canvasWidth * dpr;
+            canvas.height = canvasHeight * dpr;
+            ctx.scale(dpr, dpr);
+            
+            updateNodePositions();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- 計算節點座標 ---
+        let clientPos = { x: 0, y: 0 };
+        let lbPos = { x: 0, y: 0 };
+
+        function updateNodePositions() {
+            // 用戶端在左側
+            clientPos = { x: canvasWidth * 0.15, y: canvasHeight * 0.5 };
+            
+            // LB 在中間
+            lbPos = { x: canvasWidth * 0.45, y: canvasHeight * 0.5 };
+            
+            // 伺服器在右側，上下排列
+            const serverX = canvasWidth * 0.8;
+            const spacing = Math.min(180, canvasHeight / 3);
+            const startY = canvasHeight * 0.5 - spacing;
+
+            servers.forEach((srv, index) => {
+                srv.x = serverX;
+                srv.y = startY + (index * spacing);
+            });
+        }
+
+        // --- 切換模式邏輯 ---
+        function setMode(mode) {
+            currentMode = mode;
+            packets = []; // 清空現有封包
+            
+            // 重置伺服器負載
+            servers.forEach(s => s.load = 0);
+            updateServerStats();
+
+            if (mode === MODE_L4) {
+                btnL4.className = 'toggle-btn active px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2';
+                btnL7.className = 'toggle-btn inactive px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2';
+                panelTitle.innerHTML = '<span class="bg-indigo-500 text-white text-xs px-2 py-0.5 rounded">L4</span> 傳輸層負載平衡';
+                panelDesc.innerHTML = '基於 <b>IP 與 Port</b> (例如 TCP 80) 進行轉發。速度快，但無法解析 HTTP 封包內的 URL。<br><br>👉 <b>採用策略：輪詢 (Round-Robin)</b>，依序平均分配給所有伺服器。';
+                lbBehaviorText.innerHTML = '等待接收 TCP 連線請求...';
+            } else {
+                btnL7.className = 'toggle-btn inactive px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2';
+                btnL7.className = 'toggle-btn active px-6 py-2 rounded-lg font-semibold text-sm flex items-center gap-2';
+                panelTitle.innerHTML = '<span class="bg-pink-500 text-white text-xs px-2 py-0.5 rounded">L7</span> 應用層負載平衡';
+                panelDesc.innerHTML = '會拆解封包到第七層，讀取 <b>HTTP Header、URL 或 Cookie</b>，根據內容決定路由。<br><br>👉 <b>採用策略：內容路由 (Content-Based Routing)</b>，將特定請求送到專屬伺服器。';
+                lbBehaviorText.innerHTML = '等待解析 HTTP Request...';
+            }
+            lucide.createIcons();
+        }
+
+        btnL4.addEventListener('click', () => setMode(MODE_L4));
+        btnL7.addEventListener('click', () => setMode(MODE_L7));
+
+        // --- 產生流量邏輯 ---
+        function createPacket(type, path, color, icon) {
+            // 決定目標伺服器
+            let targetServer;
+            let behaviorText = "";
+
+            if (currentMode === MODE_L4) {
+                // L4: 不看內容，只做輪詢 (Round Robin)
+                targetServer = servers[l4RoundRobinIndex];
+                behaviorText = `<span class="text-indigo-600 font-bold">L4 輪詢</span><br>將連線分配至 <b>${targetServer.label}</b>`;
+                l4RoundRobinIndex = (l4RoundRobinIndex + 1) % servers.length;
+            } else {
+                // L7: 根據內容 (type/path) 路由
+                targetServer = servers.find(s => s.type === type);
+                behaviorText = `<span class="text-pink-600 font-bold">L7 內容路由</span><br>解析路徑 <code>${path}</code><br>導向專屬 <b>${targetServer.label}</b>`;
+            }
+
+            lbBehaviorText.innerHTML = behaviorText;
+
+            // 建立封包物件
+            const newPacket = {
+                id: Date.now() + Math.random(),
+                type: type,
+                path: path,
+                color: color,
+                icon: icon,
+                target: targetServer,
+                // 動畫狀態
+                x: clientPos.x,
+                y: clientPos.y,
+                progress: 0, // 0 到 1
+                stage: 'to_lb', // 'to_lb' (Client -> LB) 或 'to_server' (LB -> Server)
+                speed: 0.015,
+                // 為了視覺效果，加入偏移
+                offsetY: (Math.random() - 0.5) * 10
+            };
+
+            packets.push(newPacket);
+        }
+
+        document.getElementById('btn-traffic-img').addEventListener('click', () => {
+            createPacket('image', '/images/pic.jpg', '#3b82f6', 'image'); // Blue
+        });
+        document.getElementById('btn-traffic-api').addEventListener('click', () => {
+            createPacket('api', '/api/v1/users', '#10b981', 'database'); // Emerald
+        });
+        document.getElementById('btn-traffic-video').addEventListener('click', () => {
+            createPacket('video', '/video/stream', '#a855f7', 'video'); // Purple
+        });
+
+        // --- 更新伺服器狀態 UI ---
+        function updateServerStats() {
+            serverStatsContainer.innerHTML = '';
+            servers.forEach(srv => {
+                // 計算長條圖寬度
+                const maxLoad = Math.max(...servers.map(s => s.load), 1); // 避免除以 0
+                const percent = Math.min(100, (srv.load / maxLoad) * 100);
+                
+                const html = `
+                    <div class="flex flex-col gap-1">
+                        <div class="flex justify-between text-xs font-semibold text-slate-700">
+                            <span class="flex items-center gap-1">
+                                <span class="w-2 h-2 rounded-full inline-block" style="background-color: ${srv.color}"></span>
+                                ${srv.label}
+                            </span>
+                            <span>${srv.load} reqs</span>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                            <div class="h-1.5 rounded-full transition-all duration-300 ease-out" 
+                                 style="width: ${percent}%; background-color: ${srv.color}"></div>
+                        </div>
+                    </div>
+                `;
+                serverStatsContainer.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
+        // 初始化狀態
+        updateServerStats();
+
+        // --- 繪圖函數 ---
+
+        // 繪製圓角矩形 (設備節點使用)
+        function drawDeviceBox(x, y, width, height, color, iconStr, label, subLabel) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            // 陰影
+            ctx.shadowColor = 'rgba(0,0,0,0.1)';
+            ctx.shadowBlur = 15;
+            ctx.shadowOffsetY = 5;
+
+            // 框體
+            ctx.beginPath();
+            ctx.roundRect(-width/2, -height/2, width, height, 12);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 頂部裝飾條
+            ctx.beginPath();
+            ctx.roundRect(-width/2, -height/2, width, 6, [12, 12, 0, 0]);
+            ctx.fillStyle = color;
+            ctx.fill();
+
+            ctx.shadowColor = 'transparent';
+
+            // 文字
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#1e293b';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillText(label, 0, 5);
+
+            if(subLabel) {
+                ctx.fillStyle = '#64748b';
+                ctx.font = '11px sans-serif';
+                ctx.fillText(subLabel, 0, 22);
+            }
+
+            ctx.restore();
+        }
+
+        // 繪製封包
+        function drawDataPacket(pkt) {
+            ctx.save();
+            ctx.translate(pkt.x, pkt.y + pkt.offsetY);
+
+            // 外殼
+            ctx.beginPath();
+            ctx.roundRect(-25, -15, 50, 30, 6);
+            ctx.fillStyle = pkt.color;
+            ctx.fill();
+            
+            // 如果是 L7 模式，顯示封包內部資訊 (URL)，L4 模式則顯示 Port
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            if (currentMode === MODE_L4 && pkt.stage === 'to_lb') {
+                // L4 進入 LB 前，看似只是 TCP 封包
+                ctx.font = 'bold 11px sans-serif';
+                ctx.fillText('TCP:80', 0, 0);
+            } else {
+                // L7 或進入 LB 後，顯示詳細類型
+                ctx.font = 'bold 10px sans-serif';
+                let shortPath = pkt.path.split('/')[1]; // 簡短路徑
+                ctx.fillText('/' + shortPath, 0, 0);
+            }
+
+            ctx.restore();
+        }
+
+        // 繪製連線
+        function drawConnection(startX, startY, endX, endY, isDashed = false) {
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.lineWidth = 2;
+            if (isDashed) {
+                ctx.setLineDash([8, 8]);
+                // 讓虛線流動
+                ctx.lineDashOffset = -(Date.now() / 50) % 16;
+            } else {
+                ctx.setLineDash([]);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset
+        }
+
+        // --- 動畫主迴圈 ---
+        function render() {
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            // 1. 繪製線路
+            // Client to LB
+            drawConnection(clientPos.x + 40, clientPos.y, lbPos.x - 60, lbPos.y, true);
+            // LB to Servers
+            servers.forEach(srv => {
+                drawConnection(lbPos.x + 60, lbPos.y, srv.x - 60, srv.y, false);
+            });
+
+            // 2. 繪製靜態設備節點
+            // Client
+            drawDeviceBox(clientPos.x, clientPos.y, 80, 80, '#64748b', 'laptop', 'Client', '用戶端');
+            
+            // Load Balancer
+            let lbColor = currentMode === MODE_L4 ? '#4f46e5' : '#ec4899'; // Indigo for L4, Pink for L7
+            let lbLabel = currentMode === MODE_L4 ? 'L4 LB' : 'L7 LB';
+            drawDeviceBox(lbPos.x, lbPos.y, 120, 90, lbColor, 'git-merge', lbLabel, 'Load Balancer');
+
+            // Servers
+            servers.forEach(srv => {
+                drawDeviceBox(srv.x, srv.y, 120, 70, srv.color, 'server', srv.label, `Load: ${srv.load}`);
+            });
+
+            // 3. 繪製與更新封包
+            for (let i = packets.length - 1; i >= 0; i--) {
+                let p = packets[i];
+                
+                // 更新進度
+                p.progress += p.speed;
+
+                if (p.stage === 'to_lb') {
+                    // 往 LB 移動 (Ease In Out)
+                    const ease = Math.sin((p.progress * Math.PI) / 2); // 簡單緩動
+                    p.x = clientPos.x + 40 + (lbPos.x - 60 - clientPos.x - 40) * ease;
+                    p.y = clientPos.y + (lbPos.y - clientPos.y) * ease;
+
+                    if (p.progress >= 1) {
+                        p.stage = 'processing'; // 在 LB 停留一下
+                        p.progress = 0;
+                        
+                        // 視覺提示 LB 正在處理
+                        ctx.beginPath();
+                        ctx.arc(lbPos.x, lbPos.y, 60 + Math.sin(Date.now() / 100) * 10, 0, Math.PI*2);
+                        ctx.fillStyle = lbColor + '33'; // 帶透明度
+                        ctx.fill();
+                    }
+                } else if (p.stage === 'processing') {
+                    p.x = lbPos.x;
+                    p.y = lbPos.y;
+                    p.progress += p.speed * 2; // 處理速度快一點
+                    if(p.progress >= 1) {
+                        p.stage = 'to_server';
+                        p.progress = 0;
+                    }
+                } else if (p.stage === 'to_server') {
+                    // 從 LB 往 Server 移動
+                    const ease = 1 - Math.cos((p.progress * Math.PI) / 2);
+                    p.x = lbPos.x + 60 + (p.target.x - 60 - lbPos.x - 60) * ease;
+                    p.y = lbPos.y + (p.target.y - lbPos.y) * ease;
+
+                    if (p.progress >= 1) {
+                        // 抵達伺服器
+                        p.target.load++;
+                        updateServerStats();
+                        // 移除封包
+                        packets.splice(i, 1);
+                        continue;
+                    }
+                }
+
+                drawDataPacket(p);
+            }
+
+            animationId = requestAnimationFrame(render);
+        }
+
+        // --- 啟動 ---
+        resizeCanvas();
+        setMode(MODE_L4); // 預設 L4
+        render();
+
+    </script>
+</body>
+</html>
